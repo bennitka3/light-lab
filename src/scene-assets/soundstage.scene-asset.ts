@@ -168,7 +168,17 @@ export function createSoundstage(): Group {
 /** Front edge of the kit area, where unused lights are parked, in stage-local z. */
 export const KIT_Z = 0.27;
 export const KIT_HEIGHT = 0.05;
-export type FixtureKind = 'softbox' | 'fresnel' | 'par';
+export type FixtureKind = 'softbox' | 'fresnel' | 'par' | 'panel' | 'strip';
+/** A gel clipped over the light: CTO turns it warm orange, like tungsten or sunset. */
+export type Gel = 'none' | 'cto';
+const gelMaterial = new MeshStandardMaterial({
+  color: '#ff9a3c',
+  emissive: '#ff8a2a',
+  emissiveIntensity: 0.35,
+  transparent: true,
+  opacity: 0.75,
+  roughness: 0.4,
+});
 
 const standMaterial = new MeshStandardMaterial({ color: '#2b2b2e', roughness: 0.45, metalness: 0.7 });
 const fabricMaterial = new MeshStandardMaterial({ color: '#111113', roughness: 0.95 });
@@ -275,22 +285,65 @@ function createParHead(head: Group): void {
   head.add(can, lip, face);
 }
 
+function createPanelHead(head: Group): void {
+  // A flat bi-color LED panel: thin frame, grid of diodes behind a diffuser.
+  const frame = new Mesh(new BoxGeometry(0.03, 0.022, 0.004), panelFrameMaterial);
+  frame.position.z = -0.002;
+  const face = new Mesh(new BoxGeometry(0.026, 0.018, 0.001), faceMaterial('#eef3ff'));
+  face.name = 'fixture-face';
+  face.position.z = 0.0005;
+  const knob = new Mesh(new CylinderGeometry(0.0015, 0.0015, 0.002, 10), standMaterial);
+  knob.rotation.x = Math.PI / 2;
+  knob.position.set(0.011, -0.008, -0.005);
+  head.add(frame, face, knob);
+}
+
+function createStripHead(head: Group): void {
+  // A strip softbox: tall and narrow, for rims and edges.
+  const sides = new Mesh(new CylinderGeometry(0.006, 0.014, 0.02, 4, 1, true), fabricMaterial);
+  sides.rotation.set(-Math.PI / 2, Math.PI / 4, 0);
+  sides.scale.set(0.45, 1, 1.9);
+  sides.position.z = -0.01;
+  const face = new Mesh(new BoxGeometry(0.011, 0.042, 0.001), faceMaterial('#fff4e0'));
+  face.name = 'fixture-face';
+  head.add(sides, face);
+}
+
+const panelFrameMaterial = new MeshStandardMaterial({ color: '#bfc3c9', roughness: 0.5, metalness: 0.5 });
+
 /**
  * A light on a stand. The group's origin is the center of the light's head;
  * "fixture-head" turns to aim (it faces +Z, so lookAt aims it) and
  * "fixture-stand" is stretched down to the floor by the lighting system.
  */
-export function createFixture(kind: FixtureKind): Group {
+export function createFixture(kind: FixtureKind, gel: Gel = 'none'): Group {
   const fixture = new Group();
-  fixture.name = kind;
+  fixture.name = gel === 'none' ? kind : `${kind}-${gel}`;
   const head = new Group();
   head.name = 'fixture-head';
   if (kind === 'softbox') {
     createSoftboxHead(head);
   } else if (kind === 'fresnel') {
     createFresnelHead(head);
+  } else if (kind === 'panel') {
+    createPanelHead(head);
+  } else if (kind === 'strip') {
+    createStripHead(head);
   } else {
     createParHead(head);
+  }
+  if (gel !== 'none') {
+    // An orange gel sheet clipped just in front of the face.
+    const face = head.getObjectByName('fixture-face');
+    if (face instanceof Mesh) {
+      face.geometry.computeBoundingBox();
+      const size = new Vector3();
+      face.geometry.boundingBox?.getSize(size);
+      const sheet = new Mesh(new BoxGeometry(size.x + 0.003, Math.max(size.y, size.z) + 0.003, 0.0006), gelMaterial);
+      sheet.name = 'fixture-gel';
+      sheet.position.z = 0.0022;
+      head.add(sheet);
+    }
   }
   head.traverse((child) => {
     if (child instanceof Mesh) {

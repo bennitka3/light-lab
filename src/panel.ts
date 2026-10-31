@@ -34,7 +34,7 @@ export class PanelSystem extends createSystem({}) {
       exitButton.setProperties({ display: is2D ? 'none' : 'flex' });
       headsetNote?.setProperties({ display: is2D && !canEnterXR ? 'flex' : 'none' });
       for (const line of desktopHelp) {
-        line?.setProperties({ display: is2D && !canEnterXR ? 'flex' : 'none' });
+        line?.setProperties({ display: is2D ? 'flex' : 'none' });
       }
     };
     const xr = navigator.xr;

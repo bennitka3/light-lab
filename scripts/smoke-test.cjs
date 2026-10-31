@@ -1,7 +1,8 @@
-// Smoke test for Scene 1 against the running dev server (npm run dev).
-// Loads the page, drags the softbox onto the set with the mouse, then kills the
-// house lights, switches the softbox on, puts it at the target and checks the
-// level can still be won. Saves screenshots.
+// Real-mouse smoke test for Scene 1 against the running dev server (npm run dev).
+// Uses only mouse input for: the call sheet button, the HOUSE switch, dragging
+// a light, raising it with the wheel mid-drag, clicking it on, orbiting and
+// zooming. Then puts the light on its mark through the test API and checks the
+// scene is won and the call sheet moves on. Saves screenshots.
 // Usage: node scripts/smoke-test.cjs [url] [outDir]
 const { chromium } = require('playwright');
 
@@ -16,47 +17,66 @@ const { chromium } = require('playwright');
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(url);
   await page.waitForFunction(() => window.lightLab, null, { timeout: 30000 });
-  await page.waitForTimeout(2000);
-  await page.screenshot({ path: `${out}/smoke-start.png` });
+  await page.waitForTimeout(2500);
+  const api = (fn, arg) => page.evaluate(fn, arg);
+  const at = (what) => api((w) => window.lightLab.screenOf(w), what);
+  const click = async (p) => {
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  };
+  const results = {};
 
-  const state = () =>
-    page.evaluate(() => ({
-      on: window.lightLab.fixtures.filter((f) => f.on).map((f) => f.kind),
-      score: window.lightLab.score(),
-      hint: window.lightLab.hint(),
-    }));
+  await click(await at('card-button'));
+  results.cardStartsScene = (await api(() => window.lightLab.level())).phase === 'playing';
 
-  // Drag the softbox (middle of the kit) onto the set with the mouse.
-  const start = await page.evaluate(() => {
-    const f = window.lightLab.fixtures.find((x) => x.kind === 'softbox');
-    return { x: f.local.x, z: f.local.z };
-  });
-  await page.mouse.move(617, 535);
+  results.houseStartsOn = await api(() => window.lightLab.houseOn());
+  await click(await at('house'));
+  results.houseSwitchWorks = !(await api(() => window.lightLab.houseOn()));
+
+  const idx = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.kind === 'softbox'));
+  const before = await api((i) => ({ ...window.lightLab.fixtures()[i].local }), idx);
+  const p = await at(idx);
+  await page.mouse.move(p.x, p.y);
   await page.mouse.down();
-  await page.mouse.move(540, 420, { steps: 15 });
+  await page.mouse.move(p.x - 60, p.y - 110, { steps: 15 });
+  await page.mouse.wheel(0, -400);
+  await page.waitForTimeout(200);
   await page.mouse.up();
-  await page.waitForTimeout(500);
-  const moved = await page.evaluate(() => {
-    const f = window.lightLab.fixtures.find((x) => x.kind === 'softbox');
-    return { x: f.local.x, z: f.local.z };
-  });
-  const dragWorked = Math.hypot(moved.x - start.x, moved.z - start.z) > 0.05;
+  await page.waitForTimeout(300);
+  const after = await api((i) => ({ ...window.lightLab.fixtures()[i].local }), idx);
+  results.dragMoves = Math.hypot(after.x - before.x, after.z - before.z) > 0.03;
+  results.wheelRaises = after.y > before.y + 0.01;
 
-  // Kill the house lights, switch the softbox on, put it exactly at the
-  // target and wait past the win hold.
-  const houseStartsOn = await page.evaluate(() => window.lightLab.houseOn());
-  await page.evaluate(() => {
-    window.lightLab.setHouse(false);
-    const f = window.lightLab.fixtures.find((x) => x.kind === 'softbox');
-    if (!f.on) window.lightLab.toggle('softbox');
-    f.local.set(-0.0927, 0.197, 0.0327);
-  });
-  await page.waitForTimeout(2000);
-  const atTarget = await state();
-  await page.screenshot({ path: `${out}/smoke-win.png` });
+  await click(await at(idx));
+  results.clickTurnsOn = await api((i) => window.lightLab.fixtures()[i].on, idx);
 
-  const ok = houseStartsOn && dragWorked && atTarget.score >= 90 && errors.length === 0;
-  console.log(JSON.stringify({ ok, houseStartsOn, dragWorked, atTarget, errors }, null, 2));
+  const yaw0 = await api(() => window.lightLab.orbit.yaw);
+  await page.mouse.move(640, 690);
+  await page.mouse.down();
+  await page.mouse.move(540, 690, { steps: 10 });
+  await page.mouse.up();
+  results.emptyDragOrbits = Math.abs((await api(() => window.lightLab.orbit.yaw)) - yaw0) > 0.1;
+  const r0 = await api(() => window.lightLab.orbit.radius);
+  await page.mouse.wheel(0, 300);
+  await page.waitForTimeout(200);
+  results.wheelZooms = (await api(() => window.lightLab.orbit.radius)) > r0;
+  await page.screenshot({ path: `${out}/smoke-playing.png` });
+
+  // Put the light exactly on its mark and wait for the director to call it.
+  await api(() => window.lightLab.solve());
+  await page.waitForTimeout(3500);
+  results.wins = (await api(() => window.lightLab.level())).phase === 'won';
+  await page.screenshot({ path: `${out}/smoke-won.png` });
+  await click(await at('card-button'));
+  await page.waitForTimeout(800);
+  results.cardGoesToScene2 = (await api(() => window.lightLab.level())).index === 1;
+
+  console.log(results);
+  console.log('errors', errors.length ? errors : 'none');
   await browser.close();
+  const ok = Object.values(results).every(Boolean) && !errors.length;
+  console.log(ok ? 'PASS' : 'FAIL');
   process.exit(ok ? 0 : 1);
 })();

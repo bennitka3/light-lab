@@ -2,8 +2,9 @@ import {
   BoxGeometry,
   CanvasTexture,
   Color,
-  DirectionalLight,
   createSystem,
+  DirectionalLight,
+  DistanceGrabbable,
   Entity,
   Grabbed,
   Group,
@@ -12,10 +13,13 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  MovementMode,
   Object3D,
+  OneHandGrabbable,
   PerspectiveCamera,
   Plane,
   PlaneGeometry,
+  PointLight,
   Pressed,
   RayInteractable,
   Raycaster,
@@ -26,36 +30,47 @@ import {
   VisibilityState,
   WebGLRenderTarget,
 } from '@iwsdk/core';
+import { CreatureFeature } from './creature-feature.js';
 import { LightingStage, StageLight } from './lighting-components.js';
+import { type KitItem, type LevelDef, LEVELS, type Role } from './levels.js';
+import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-sets.js';
 import {
+  createFixture,
   type FixtureKind,
+  type Gel,
   KIT_HEIGHT,
   KIT_Z,
   STAGE_DEPTH,
   STAGE_HEIGHT,
   STAGE_WIDTH,
 } from './scene-assets/soundstage.scene-asset.js';
+import { CARD_HEIGHT, CARD_WIDTH, type CardContent, StoryCard, wrap } from './story-card.js';
 
 /**
- * Runs one lighting level. The house lights start on and flatten everything;
- * the player kills them with the HOUSE switch. The light kit sits behind the
- * tape at the front of the stage; tapping a light switches it on or off, and
- * a switched-on light always aims at the subject's head. A cine camera renders "your shot"
- * to the monitor, the same set lit by the right light in the right spot is the
- * "target" shot, and a match score compares the two setups.
+ * Runs Lucky Break: seven lighting scenes on one tabletop soundstage, and the
+ * story between them.
  *
- * In the headset a light is grabbed with a pinch (DistanceGrabbable). In a
- * desktop browser it is dragged with the mouse across the floor; Shift-drag or
- * the scroll wheel raises or lowers it. A click without dragging (or a quick
- * pinch in the headset) switches it on or off. Dragging empty space turns the
- * view around the set, and scrolling zooms.
+ * Each scene (see levels.ts) builds its set pieces, seats the cast, and hands
+ * the player a kit of lights parked behind the tape. The house lights start
+ * on and flatten everything; the HOUSE switch kills them. Tapping a light
+ * switches it on or off, and a switched-on light aims at the cast (or, for
+ * SCREEN panels, at the green screen). A cine camera renders "your shot" to
+ * the monitor next to a "target" shot of the same set lit the way the scene
+ * asks for, and a match score compares the two setups role by role (key,
+ * fill, back light and so on). Hold the winning score and the director calls
+ * cut; the call sheet card then moves the story on.
+ *
+ * In the headset a light is grabbed with a pinch (DistanceGrabbable); a quick
+ * pinch that barely moves it toggles it. Switches and the card are pressed
+ * with a ray or a poke. In a desktop browser a light is dragged across the
+ * floor, Shift-drag or the scroll wheel raises it, a click toggles it, and
+ * dragging empty space turns the view around the set.
  */
 
 const MONITOR_W = 0.24;
 const MONITOR_H = 0.135;
 const SHOT_W = 512;
 const SHOT_H = 288;
-const WIN_SCORE = 90;
 const WIN_HOLD_SECONDS = 0.8;
 // Where a light's head may go, in stage-local meters.
 const BOUNDS_X = STAGE_WIDTH / 2 - 0.02;
@@ -63,35 +78,52 @@ const BOUNDS_BACK = -STAGE_DEPTH / 2 + 0.02;
 const BOUNDS_FRONT = STAGE_DEPTH / 2 + 0.14;
 const MIN_HEIGHT = 0.03;
 const MAX_HEIGHT = STAGE_HEIGHT - 0.02;
-// Keeps lights from being pushed through the actor.
+// Keeps lights from being pushed through the cast.
 const SUBJECT_CLEARANCE = 0.03;
 // A grab or click shorter than this, that barely moves the light, is a tap on its switch.
-const TAP_SECONDS = 0.3;
+const TAP_SECONDS = 0.45;
 const TAP_MAX_MOVE = 0.01;
 const TAP_MAX_PIXELS = 5;
+// Where SCREEN lights point: the middle of the back wall.
+const SCREEN_CENTER = new Vector3(0, STAGE_HEIGHT / 2, -STAGE_DEPTH / 2);
+const HEAD_HEIGHT = 0.105;
+// Within this distance of a fixed-position role target counts as a perfect spot.
+const POSITION_TOLERANCE = 0.045;
 
 type Pose = { azimuth: number; elevation: number; distance: number };
+type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
 
-/** How each kind of fixture lights: the softbox is broad and soft, the others hard. */
+/** How each kind of fixture lights: softboxes and panels are broad and soft, the others hard. */
 const LIGHT_QUALITY: Record<
   FixtureKind,
   { color: string; intensity: number; angleDeg: number; penumbra: number; shadowRadius: number }
 > = {
   softbox: { color: '#fff1dc', intensity: 0.25, angleDeg: 60, penumbra: 1, shadowRadius: 10 },
+  panel: { color: '#eef3ff', intensity: 0.11, angleDeg: 70, penumbra: 1, shadowRadius: 8 },
+  strip: { color: '#fff1dc', intensity: 0.2, angleDeg: 45, penumbra: 1, shadowRadius: 6 },
   fresnel: { color: '#ffd2a0', intensity: 0.45, angleDeg: 20, penumbra: 0.3, shadowRadius: 1 },
   par: { color: '#ffe2b8', intensity: 0.6, angleDeg: 12, penumbra: 0.15, shadowRadius: 1 },
+};
+const CTO_TINT = new Color('#ff9a45');
+
+const KIND_NAMES: Record<FixtureKind, string> = {
+  softbox: 'softbox',
+  panel: 'LED panel',
+  strip: 'strip box',
+  fresnel: 'Fresnel',
+  par: 'PAR can',
 };
 
 type Fixture = {
   entity: Entity;
   object: Object3D;
-  kind: FixtureKind;
+  item: KitItem;
   head: Object3D;
   face?: MeshStandardMaterial;
-  led?: MeshStandardMaterial;
+  led: MeshStandardMaterial;
+  handle?: Object3D;
   pole: Object3D;
   base: Object3D;
-  handle?: Object3D;
   spot: SpotLight;
   /** Head position in stage-local meters. */
   local: Vector3;
@@ -101,11 +133,23 @@ type Fixture = {
   grabStart: Vector3;
 };
 
-function createSpot(kind: FixtureKind): SpotLight {
+/** Something the player switches by pressing it: the HOUSE switch, a practical lamp. */
+type Switch = {
+  entity: Entity;
+  hit: Object3D;
+  toggle: () => void;
+  pressed: boolean;
+};
+
+function createSpot(kind: FixtureKind, gel: Gel = 'none'): SpotLight {
   const quality = LIGHT_QUALITY[kind];
+  const color = new Color(quality.color);
+  if (gel === 'cto') {
+    color.multiply(CTO_TINT);
+  }
   const spot = new SpotLight(
-    quality.color,
-    quality.intensity,
+    color,
+    quality.intensity * (gel === 'cto' ? 1.4 : 1),
     0,
     MathUtils.degToRad(quality.angleDeg),
     quality.penumbra,
@@ -122,42 +166,83 @@ function createSpot(kind: FixtureKind): SpotLight {
   return spot;
 }
 
+function itemName(item: KitItem): string {
+  const gel = item.gel === 'cto' ? ' with orange gel' : '';
+  const screen = item.aim === 'screen' ? 'SCREEN ' : '';
+  return `${screen}${KIND_NAMES[item.kind]}${gel}`;
+}
+
+function startLevelFromUrl(): number {
+  const param = new URLSearchParams(window.location.search).get('scene');
+  const n = param ? Number.parseInt(param, 10) : 1;
+  return Number.isFinite(n) ? MathUtils.clamp(n, 1, LEVELS.length) - 1 : 0;
+}
+
+/** Dev-only trail of player actions, so headset-emulator tests can read what happened. */
+function devLog(message: string): void {
+  if (import.meta.env.DEV) {
+    console.info(`[lightLab] ${message}`);
+  }
+}
+
 export class LightingLevelSystem extends createSystem({
   stages: { required: [LightingStage] },
-  lights: { required: [StageLight] },
 }) {
   private ready = false;
   private stage!: Object3D;
-  private head!: Object3D;
   private lens!: Object3D;
   private cameraRig!: Object3D;
+  private directorsChair?: Object3D;
+  private actor?: Object3D;
+  private extraActors: Object3D[] = [];
+
+  // The scene being played.
+  private levelIndex = 0;
+  private level: LevelDef = LEVELS[0];
+  private phase: Phase = 'title';
+  private set?: Object3D;
   private fixtures: Fixture[] = [];
-  private targetSpot!: SpotLight;
-  private targetKind: FixtureKind = 'softbox';
-  private target: Pose = { azimuth: -45, elevation: 35, distance: 0.16 };
+  private targetSpots: SpotLight[] = [];
+  private aimLocal = new Vector3();
+  private aimWorld = new Vector3();
+  private screenWorld = new Vector3();
+  private practical?: { on: boolean; shade: MeshStandardMaterial; bulb: PointLight; switch: Switch };
+  private greenScreen?: Mesh;
+
+  // House lights and switches.
+  private houseOn = true;
+  private houseLights: Object3D[] = [];
+  private houseLed!: MeshStandardMaterial;
+  private switches: Switch[] = [];
+  private houseSwitch!: Switch;
+
+  // Camera shots and the monitor.
   private shotCamera!: PerspectiveCamera;
   private shotTarget!: WebGLRenderTarget;
   private targetShot!: WebGLRenderTarget;
-  private framesSinceSetup = 0;
+  private framesSinceLoad = 0;
   private monitor!: Group;
+  private liveMaterial!: MeshBasicMaterial;
   private label!: { canvas: HTMLCanvasElement; texture: CanvasTexture };
   private shownText = '';
   private holdTime = 0;
-  private won = false;
-  private backdrop = new Color('#141416');
-  private houseOn = true;
-  private houseLights: Object3D[] = [];
-  private houseSwitch!: Entity;
-  private houseLed!: MeshStandardMaterial;
-  private housePressed = false;
-  private pressingHouse = false;
+  private creature = new CreatureFeature();
+  private creatureHold = 0;
+
+  // The call sheet.
+  private card = new StoryCard();
+  private cardEntity!: Entity;
+  private cardPressed = false;
+
   private errorShown = false;
+  private backdrop = new Color('#141416');
   private chime = new Audio(`${import.meta.env.BASE_URL}audio/chime.mp3`);
 
   // Desktop mouse: dragging a light, or orbiting the view around the set.
   private immersive = false;
   private dragged: Fixture | null = null;
   private orbiting = false;
+  private pressing: (() => void) | null = null;
   private dragPlane = new Plane();
   private dragOffset = new Vector3();
   private downPointer = new Vector2();
@@ -168,12 +253,11 @@ export class LightingLevelSystem extends createSystem({
   private orbit = { yaw: 0, pitch: 0.4, radius: 0.85 };
   private pivot = new Vector3();
 
-  // Scratch vectors, reused every frame.
-  private headWorld = new Vector3();
-  private lensWorld = new Vector3();
+  // Scratch values, reused every frame.
   private v1 = new Vector3();
   private v2 = new Vector3();
   private v3 = new Vector2();
+  private lensWorld = new Vector3();
 
   init(): void {
     this.cleanupFuncs.push(
@@ -202,15 +286,14 @@ export class LightingLevelSystem extends createSystem({
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContextMenu);
-      for (const fixture of this.fixtures) {
-        fixture.spot.removeFromParent();
-        fixture.spot.target.removeFromParent();
-      }
-      this.targetSpot?.removeFromParent();
+      this.unloadLevel();
       for (const light of this.houseLights) {
         light.removeFromParent();
       }
-      this.houseSwitch?.dispose();
+      for (const sw of this.switches) {
+        sw.entity.dispose();
+      }
+      this.cardEntity?.dispose();
       this.monitor?.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
@@ -227,9 +310,9 @@ export class LightingLevelSystem extends createSystem({
       if (!this.immersive) {
         this.applyOrbit();
       }
-      this.framesSinceSetup++;
-      this.head.getWorldPosition(this.headWorld);
-      this.updateHouseSwitch();
+      this.framesSinceLoad++;
+      this.updateAim();
+      this.updateSwitches();
       for (const fixture of this.fixtures) {
         this.updateGrab(fixture, delta);
         this.updateFixture(fixture);
@@ -237,10 +320,16 @@ export class LightingLevelSystem extends createSystem({
       this.aimShotCamera();
       // Capture the target once shadows settle, then refresh it now and then in
       // case the set was moved (for example placed on a desk in the headset).
-      if (this.framesSinceSetup % 90 === 3) {
+      if (this.framesSinceLoad % 90 === 3) {
         this.renderTargetShot();
       }
-      this.renderShot(this.shotTarget, true);
+      // The monitor's live picture is a second full render of the set. In the
+      // headset that doubles a frame's cost, so refresh it every third frame
+      // there (24 fps on a 72 Hz Quest is plenty for a monitor).
+      if (!this.immersive || this.framesSinceLoad % 3 === 0) {
+        this.renderShot(this.shotTarget, true);
+      }
+      this.creature.update(delta);
       this.updateScore(delta);
     } catch (error) {
       this.reportError(error);
@@ -260,20 +349,463 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
+  private trySetup(): boolean {
+    const stageEntity = this.queries.stages.entities.values().next().value;
+    const stage = stageEntity?.object3D;
+    const lens = stage?.getObjectByName('camera-lens');
+    const cameraRig = stage?.getObjectByName('camera-rig');
+    if (!stageEntity || !stage || !lens || !cameraRig) {
+      return false;
+    }
+    this.stage = stage;
+    this.lens = lens;
+    this.cameraRig = cameraRig;
+    this.directorsChair = stage.getObjectByName('subject');
+    this.actor = this.world.getSceneObject('actor') ?? stage.getObjectByName('subject-head')?.parent ?? undefined;
+
+    this.shotCamera = new PerspectiveCamera(26, SHOT_W / SHOT_H, 0.005, 2);
+    this.shotTarget = new WebGLRenderTarget(SHOT_W, SHOT_H);
+    this.shotTarget.texture.colorSpace = SRGBColorSpace;
+    this.targetShot = new WebGLRenderTarget(SHOT_W, SHOT_H);
+    this.targetShot.texture.colorSpace = SRGBColorSpace;
+
+    this.buildMonitor();
+    this.buildHouseLights();
+    this.buildCard();
+    this.initOrbit();
+    this.ready = true;
+
+    const start = startLevelFromUrl();
+    this.loadLevel(start);
+    if (start === 0) {
+      this.phase = 'title';
+      this.showTitleCard();
+    }
+
+    if (import.meta.env.DEV) {
+      // Lets automated browser tests drive and read the game.
+      Object.assign(window, {
+        lightLab: {
+          fixtures: () => this.fixtures,
+          orbit: this.orbit,
+          score: () => this.evaluate().score,
+          hint: () => this.evaluate().hint,
+          houseOn: () => this.houseOn,
+          setHouse: (on: boolean) => {
+            this.houseOn = on;
+          },
+          toggle: (kind: string) => {
+            const fixture = this.fixtures.find((f) => f.item.kind === kind && !f.on) ?? this.fixtures.find((f) => f.item.kind === kind);
+            if (fixture) this.toggle(fixture);
+          },
+          level: () => ({ index: this.levelIndex, id: this.level.id, phase: this.phase }),
+          loadLevel: (i: number) => this.loadLevel(i),
+          pressCard: () => this.pressCard(),
+          solve: () => this.solve(),
+          practical: () => this.practical?.on,
+          togglePractical: () => this.practical?.switch.toggle(),
+          creature: () => this.creature.played,
+          // Screen pixels of a thing, for real-mouse tests: 'card', 'house',
+          // 'card-button', a fixture index, or 'role:N' (role N's target spot).
+          screenOf: (what: string | number) => {
+            const v = new Vector3();
+            if (what === 'card' || what === 'card-button') {
+              v.set(what === 'card' ? 0 : -CARD_WIDTH / 2 + 0.06, what === 'card' ? 0 : -CARD_HEIGHT / 2 + 0.022, 0);
+              this.card.mesh.localToWorld(v);
+            } else if (what === 'house') {
+              this.houseSwitch.hit.getWorldPosition(v);
+            } else if (what === 'lamp' && this.practical) {
+              this.practical.switch.hit.getWorldPosition(v);
+            } else if (typeof what === 'number') {
+              this.fixtures[what].head.getWorldPosition(v);
+            } else if (what.startsWith('role:')) {
+              const role = this.level.roles[Number(what.slice(5))];
+              this.roleLocal(role, v);
+              this.stage.localToWorld(v);
+            }
+            v.project(this.world.camera);
+            const rect = this.world.renderer.domElement.getBoundingClientRect();
+            return { x: rect.left + ((v.x + 1) / 2) * rect.width, y: rect.top + ((1 - v.y) / 2) * rect.height };
+          },
+        },
+      });
+    }
+    return true;
+  }
+
+  // --- Scenes --------------------------------------------------------------
+
+  private loadLevel(index: number): void {
+    this.unloadLevel();
+    this.levelIndex = index;
+    this.level = LEVELS[index];
+    const level = this.level;
+    this.phase = 'playing';
+    this.houseOn = true;
+    this.holdTime = 0;
+    this.framesSinceLoad = 0;
+    this.shownText = '';
+
+    // Set pieces.
+    this.set = createLevelSet(level.set);
+    this.stage.add(this.set);
+    this.greenScreen = (this.set.getObjectByName('green-screen') as Mesh | undefined) ?? undefined;
+
+    // Cast.
+    if (this.directorsChair) {
+      this.directorsChair.visible = level.directorsChair;
+    }
+    if (this.actor) {
+      const first = level.actors[0];
+      this.actor.visible = Boolean(first);
+      if (first) {
+        this.actor.position.set(...first.pos);
+        this.actor.rotation.set(0, first.rotY ?? 0, 0);
+      }
+      for (const extra of level.actors.slice(1)) {
+        const clone = this.actor.clone(true);
+        clone.position.set(...extra.pos);
+        clone.rotation.set(0, extra.rotY ?? 0, 0);
+        clone.visible = true;
+        this.stage.add(clone);
+        this.extraActors.push(clone);
+      }
+    }
+    if (level.aim) {
+      this.aimLocal.set(...level.aim);
+    } else if (level.actors.length > 0) {
+      this.aimLocal.set(0, 0, 0);
+      for (const actor of level.actors) {
+        this.aimLocal.x += actor.pos[0];
+        this.aimLocal.z += actor.pos[2];
+      }
+      this.aimLocal.divideScalar(level.actors.length);
+      this.aimLocal.y = HEAD_HEIGHT;
+    }
+
+    // Camera.
+    this.cameraRig.position.set(level.camera.x, 0, level.camera.z);
+    this.shotCamera.fov = level.camera.fov;
+    this.shotCamera.updateProjectionMatrix();
+
+    // The practical lamp, if this set has one.
+    const lamp = this.set.getObjectByName('practical-lamp');
+    const shade = lamp?.getObjectByName('practical-shade');
+    const bulb = lamp?.getObjectByName('practical-light');
+    if (lamp && shade instanceof Mesh && bulb instanceof PointLight) {
+      lamp.getWorldPosition(this.v1);
+      this.v1.y += 0.075;
+      const practical = {
+        on: false,
+        shade: shade.material as MeshStandardMaterial,
+        bulb,
+        switch: this.createSwitch(this.v1, 0.04, () => {
+          practical.on = !practical.on;
+          this.resetHold();
+        }),
+      };
+      this.practical = practical;
+    }
+
+    // The kit, parked in a row behind the tape.
+    const n = level.kit.length;
+    level.kit.forEach((item, i) => {
+      const x = n === 1 ? 0 : -0.18 + (0.36 * i) / (n - 1);
+      this.fixtures.push(this.createFixtureEntity(item, x));
+    });
+
+    // One hidden light per role, used only to render the target shot.
+    for (const role of level.roles) {
+      const spot = createSpot(role.kinds[0], role.gel);
+      spot.visible = false;
+      this.world.scene.add(spot, spot.target);
+      this.targetSpots.push(spot);
+    }
+
+    this.showBriefCard();
+  }
+
+  private unloadLevel(): void {
+    for (const fixture of this.fixtures) {
+      fixture.spot.removeFromParent();
+      fixture.spot.target.removeFromParent();
+      fixture.entity.dispose();
+    }
+    this.fixtures = [];
+    for (const spot of this.targetSpots) {
+      spot.removeFromParent();
+      spot.target.removeFromParent();
+      spot.dispose();
+    }
+    this.targetSpots = [];
+    for (const actor of this.extraActors) {
+      actor.removeFromParent();
+    }
+    this.extraActors = [];
+    if (this.practical) {
+      this.removeSwitch(this.practical.switch);
+      this.practical = undefined;
+    }
+    if (this.set) {
+      this.set.removeFromParent();
+      disposeSet(this.set);
+      this.set = undefined;
+    }
+    this.greenScreen = undefined;
+    this.dragged = null;
+  }
+
+  private createFixtureEntity(item: KitItem, kitX: number): Fixture {
+    const object = createFixture(item.kind, item.gel ?? 'none');
+    if (item.aim === 'screen') {
+      object.add(this.makeTag('SCREEN', '#4ade80'));
+    } else if (item.gel === 'cto') {
+      object.add(this.makeTag('WARM', '#ff9a45'));
+    }
+    const led = this.makeLed(object);
+    const entity = this.world.createTransformEntity(object);
+    entity.addComponent(StageLight, { kind: item.kind, kitX });
+    entity.addComponent(RayInteractable);
+    entity.addComponent(DistanceGrabbable, {
+      movementMode: MovementMode.MoveFromTarget,
+      rotate: false,
+      scale: false,
+      translate: true,
+      returnToOrigin: false,
+    });
+    entity.addComponent(OneHandGrabbable, { rotate: false, translate: true });
+    const head = object.getObjectByName('fixture-head')!;
+    const face = head.getObjectByName('fixture-face');
+    const spot = createSpot(item.kind, item.gel);
+    spot.name = `${item.kind}-light`;
+    spot.visible = false;
+    this.world.scene.add(spot, spot.target);
+    return {
+      entity,
+      object,
+      item,
+      head,
+      face: face instanceof Mesh ? (face.material as MeshStandardMaterial) : undefined,
+      led,
+      handle: object.getObjectByName('fixture-handle'),
+      pole: object.getObjectByName('stand-pole')!,
+      base: object.getObjectByName('stand-base')!,
+      spot,
+      local: new Vector3(kitX, KIT_HEIGHT, KIT_Z),
+      on: false,
+      grabTime: 0,
+      grabStart: new Vector3(),
+    };
+  }
+
+  /** Moves the story on: the title starts scene 1, a won scene goes to the next one. */
+  private pressCard(): void {
+    if (!this.card.hasButton) {
+      return;
+    }
+    devLog(`card pressed in phase ${this.phase}, scene ${this.levelIndex + 1}`);
+    switch (this.phase) {
+      case 'title':
+        this.phase = 'playing';
+        this.showBriefCard();
+        break;
+      case 'won':
+        if (this.levelIndex < LEVELS.length - 1) {
+          this.loadLevel(this.levelIndex + 1);
+        } else {
+          this.rollFinale();
+        }
+        break;
+      case 'rolled':
+        this.phase = 'credits';
+        this.showCredits();
+        break;
+      case 'credits':
+        this.loadLevel(0);
+        this.phase = 'title';
+        this.showTitleCard();
+        break;
+      default:
+        break;
+    }
+  }
+
+  private showTitleCard(): void {
+    this.card.show({
+      eyebrow: 'Lucky Break',
+      title: 'Twelve years as Background Extra #47.',
+      body: "Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.",
+      footer: 'Seven scenes. One soundstage. Zero qualifications.',
+      button: 'Get to work',
+    });
+  }
+
+  private showBriefCard(): void {
+    const level = this.level;
+    this.card.show({
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title}`,
+      title: level.quote,
+      body: level.objective,
+      footer: `Kit: ${level.kit.map(itemName).join(', ')}.`,
+    });
+  }
+
+  private showWinCard(): void {
+    const last = this.levelIndex === LEVELS.length - 1;
+    this.card.show({
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · Cut!`,
+      title: last ? '"Okay. Okay. Everybody quiet. Roll it."' : '"Cut! That\'s the one. Moving on!"',
+      body: this.level.lesson,
+      footer: this.level.after || undefined,
+      button: last ? 'Roll!' : 'Next scene',
+    });
+  }
+
+  private rollFinale(): void {
+    this.phase = 'rolled';
+    if (this.greenScreen) {
+      const plate = paintLakeComo();
+      this.greenScreen.material = new MeshBasicMaterial({ map: plate, toneMapped: false });
+      this.set?.traverse((child) => {
+        if (child.name === 'tracking-mark') {
+          child.visible = false;
+        }
+      });
+    }
+    this.renderTargetShot();
+    this.drawLabel(100, 'DIRECTOR: "Is that... Lake Como? I\'m crying."', '"WHO ARE YOU?"');
+    this.card.show({
+      eyebrow: 'Rolling · Final scene',
+      title: '"Is that Lake Como? I\'m crying. Who ARE you?"',
+      body: 'The green screen is gone. The couple is on a terrace above the lake at sunset, and the light on their faces matches it.',
+      footer: 'Background Extra #47, would you come to the front, please.',
+      button: 'Take a bow',
+    });
+  }
+
+  private showCredits(): void {
+    this.card.show({
+      eyebrow: "That's a wrap",
+      title: 'LUCKY BREAK',
+      body: 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
+      footer: 'A film by ben, lit by you, built by Claude.',
+      button: 'Play again',
+    });
+  }
+
+  // --- Fixtures and switches -------------------------------------------------
+
+  /** A small power switch with a status LED on the light's yoke: green when on. */
+  private makeLed(object: Object3D): MeshStandardMaterial {
+    const box = new Mesh(new BoxGeometry(0.006, 0.004, 0.003), new MeshStandardMaterial({ color: '#1b1b1e', roughness: 0.6 }));
+    box.name = 'fixture-switch';
+    box.position.set(0, -0.016, 0.004);
+    const led = new MeshStandardMaterial({ color: '#111', emissive: '#3a1010', emissiveIntensity: 2 });
+    const dot = new Mesh(new BoxGeometry(0.0018, 0.0018, 0.0008), led);
+    dot.position.set(0, 0, 0.0018);
+    box.add(dot);
+    object.add(box);
+    return led;
+  }
+
+  /** A little label floating above a light, so special lights are easy to tell apart. */
+  private makeTag(text: string, color: string): Mesh {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 80;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(10,10,12,0.85)';
+      ctx.fillRect(0, 0, 256, 80);
+      ctx.fillStyle = color;
+      ctx.font = 'bold 52px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 128, 42);
+    }
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    const tag = new Mesh(new PlaneGeometry(0.03, 0.0094), new MeshBasicMaterial({ map: texture, toneMapped: false }));
+    tag.name = 'fixture-tag';
+    tag.position.set(0, 0.026, 0);
+    return tag;
+  }
+
+  /** An invisible press target at a world position, for the mouse, a ray or a poke. */
+  private createSwitch(worldPosition: Vector3, size: number, toggle: () => void, visual?: Object3D): Switch {
+    const hit =
+      visual ??
+      new Mesh(new BoxGeometry(size, size, size), new MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+    if (!visual) {
+      hit.position.copy(worldPosition);
+    }
+    const entity = this.world.createTransformEntity(hit);
+    entity.addComponent(RayInteractable);
+    const sw: Switch = { entity, hit, toggle, pressed: false };
+    this.switches.push(sw);
+    return sw;
+  }
+
+  private removeSwitch(sw: Switch): void {
+    this.switches = this.switches.filter((s) => s !== sw);
+    sw.entity.dispose();
+  }
+
+  private updateSwitches(): void {
+    // In the headset the input system marks a switch Pressed (ray or poke);
+    // in the browser the mouse handlers below press it.
+    for (const sw of this.switches) {
+      const pressed = this.immersive && sw.entity.hasComponent(Pressed);
+      if (pressed && !sw.pressed) {
+        sw.toggle();
+      }
+      sw.pressed = pressed;
+    }
+    const cardPressed = this.immersive && this.cardEntity.hasComponent(Pressed);
+    if (cardPressed && !this.cardPressed) {
+      this.pressCard();
+    }
+    this.cardPressed = cardPressed;
+
+    for (const light of this.houseLights) {
+      light.visible = this.houseOn;
+    }
+    this.houseLed.emissive.set(this.houseOn ? '#4ade80' : '#3a1010');
+    if (this.practical) {
+      this.practical.shade.emissiveIntensity = this.practical.on ? 1.4 : 0;
+      this.practical.bulb.intensity = this.practical.on ? 0.06 : 0;
+    }
+  }
+
+  private resetHold(): void {
+    this.holdTime = 0;
+  }
+
+  private toggle(fixture: Fixture): void {
+    devLog(`light ${fixture.item.kind} switched ${fixture.on ? 'off' : 'on'}`);
+    fixture.on = !fixture.on;
+    this.resetHold();
+  }
+
   private updateGrab(fixture: Fixture, delta: number): void {
-    // In the browser the mouse moves lights, not the grab system.
+    // In the browser the mouse moves lights, not the grab system. In the
+    // headset a light is "held" while it is grabbed (squeeze, or a hand pinch)
+    // or pressed with a ray (controller trigger, or a hand pinch).
     const grabbed = this.immersive && fixture.entity.hasComponent(Grabbed);
-    if (grabbed) {
+    const held = grabbed || (this.immersive && fixture.entity.hasComponent(Pressed));
+    if (held) {
       if (fixture.grabTime === 0) {
         fixture.grabStart.copy(fixture.local);
       }
-      fixture.grabTime += delta;
-      fixture.object.getWorldPosition(this.v1);
-      fixture.local.copy(this.stage.worldToLocal(this.v1));
-      return;
-    }
-    if (fixture.grabTime > 0) {
-      // A quick pinch that barely moved the light is a tap on its switch.
+      fixture.grabTime += Math.max(delta, 1e-4);
+      if (grabbed) {
+        fixture.object.getWorldPosition(this.v1);
+        fixture.local.copy(this.stage.worldToLocal(this.v1));
+        return;
+      }
+    } else if (fixture.grabTime > 0) {
+      devLog(`light ${fixture.item.kind} released after ${fixture.grabTime.toFixed(2)} s, moved ${fixture.local.distanceTo(fixture.grabStart).toFixed(3)} m`);
+      // A quick press or pinch that barely moved the light is a tap on its switch.
       if (fixture.grabTime < TAP_SECONDS && fixture.local.distanceTo(fixture.grabStart) < TAP_MAX_MOVE) {
         fixture.local.copy(fixture.grabStart);
         this.toggle(fixture);
@@ -284,149 +816,430 @@ export class LightingLevelSystem extends createSystem({
     this.placeFixture(fixture);
   }
 
-  private toggle(fixture: Fixture): void {
-    fixture.on = !fixture.on;
-    this.won = false;
-    this.holdTime = 0;
-  }
-
-  private toggleHouse(): void {
-    this.houseOn = !this.houseOn;
-    this.won = false;
-    this.holdTime = 0;
-  }
-
-  private updateHouseSwitch(): void {
-    // In the headset the input system marks the switch Pressed (ray or poke);
-    // in the browser the mouse handler below flips it.
-    const pressed = this.immersive && this.houseSwitch.hasComponent(Pressed);
-    if (pressed && !this.housePressed) {
-      this.toggleHouse();
-    }
-    this.housePressed = pressed;
-    for (const light of this.houseLights) {
-      light.visible = this.houseOn;
-    }
-    this.houseLed.emissive.set(this.houseOn ? '#4ade80' : '#3a1010');
-  }
-
-  private trySetup(): boolean {
-    const stageEntity = this.queries.stages.entities.values().next().value;
-    const stage = stageEntity?.object3D;
-    const head = stage?.getObjectByName('subject-head');
-    const lens = stage?.getObjectByName('camera-lens');
-    const cameraRig = stage?.getObjectByName('camera-rig');
-    const lightEntities = [...this.queries.lights.entities];
-    if (!stageEntity || !stage || !head || !lens || !cameraRig || lightEntities.length === 0) {
-      return false;
-    }
-    if (lightEntities.some((entity) => !entity.object3D)) {
-      return false;
-    }
-    this.stage = stage;
-    this.head = head;
-    this.lens = lens;
-    this.cameraRig = cameraRig;
-
-    this.targetKind = (stageEntity.getValue(LightingStage, 'targetKind') ?? 'softbox') as FixtureKind;
-    this.target = {
-      azimuth: stageEntity.getValue(LightingStage, 'targetAzimuthDeg') ?? -45,
-      elevation: stageEntity.getValue(LightingStage, 'targetElevationDeg') ?? 35,
-      distance: stageEntity.getValue(LightingStage, 'targetDistance') ?? 0.16,
-    };
-
-    for (const entity of lightEntities) {
-      const object = entity.object3D!;
-      const kind = (entity.getValue(StageLight, 'kind') ?? 'softbox') as FixtureKind;
-      const fixtureHead = object.getObjectByName('fixture-head');
-      const pole = object.getObjectByName('stand-pole');
-      const base = object.getObjectByName('stand-base');
-      if (!fixtureHead || !pole || !base) {
-        continue;
+  private clampToSet(local: Vector3): void {
+    local.x = MathUtils.clamp(local.x, -BOUNDS_X, BOUNDS_X);
+    local.y = MathUtils.clamp(local.y, MIN_HEIGHT, MAX_HEIGHT);
+    local.z = MathUtils.clamp(local.z, BOUNDS_BACK, BOUNDS_FRONT);
+    // Push the light out of the cast if it was dropped on top of them.
+    for (const actor of this.level.actors) {
+      const dx = local.x - actor.pos[0];
+      const dz = local.z - actor.pos[2];
+      const flat = Math.hypot(dx, dz);
+      if (flat < SUBJECT_CLEARANCE && local.y < HEAD_HEIGHT + 0.03) {
+        const scale = SUBJECT_CLEARANCE / Math.max(flat, 1e-4);
+        local.x = actor.pos[0] + (flat > 1e-4 ? dx * scale : SUBJECT_CLEARANCE);
+        local.z = actor.pos[2] + (flat > 1e-4 ? dz * scale : 0);
       }
-      const face = fixtureHead.getObjectByName('fixture-face');
-      const spot = createSpot(kind);
-      spot.name = `${kind}-light`;
-      spot.visible = false;
-      this.world.scene.add(spot, spot.target);
-      this.fixtures.push({
-        entity,
-        object,
-        kind,
-        head: fixtureHead,
-        face: face instanceof Mesh ? (face.material as MeshStandardMaterial) : undefined,
-        led: this.makeLed(object),
-        pole,
-        base,
-        handle: object.getObjectByName('fixture-handle'),
-        spot,
-        local: new Vector3(entity.getValue(StageLight, 'kitX') ?? 0, KIT_HEIGHT, KIT_Z),
-        on: false,
-        grabTime: 0,
-        grabStart: new Vector3(),
-      });
     }
-
-    // A work light over the kit so the gear is easy to see; its cone stops short of the actor.
-    const workLight = new SpotLight('#dfe6ff', 0.12, 0, MathUtils.degToRad(38), 0.6, 2);
-    workLight.name = 'kit-work-light';
-    workLight.position.set(0, 0.24, KIT_Z + 0.03);
-    workLight.target.position.set(0, 0, KIT_Z + 0.03);
-    stage.add(workLight, workLight.target);
-
-    this.buildHouseLights();
-
-    this.targetSpot = createSpot(this.targetKind);
-    this.targetSpot.visible = false;
-    this.world.scene.add(this.targetSpot, this.targetSpot.target);
-
-    this.shotCamera = new PerspectiveCamera(26, SHOT_W / SHOT_H, 0.005, 2);
-    this.shotTarget = new WebGLRenderTarget(SHOT_W, SHOT_H);
-    this.shotTarget.texture.colorSpace = SRGBColorSpace;
-    this.targetShot = new WebGLRenderTarget(SHOT_W, SHOT_H);
-    this.targetShot.texture.colorSpace = SRGBColorSpace;
-
-    this.buildMonitor();
-    this.initOrbit();
-    this.ready = true;
-    if (import.meta.env.DEV) {
-      // Lets automated browser tests read the lights and the score.
-      Object.assign(window, {
-        lightLab: {
-          fixtures: this.fixtures,
-          orbit: this.orbit,
-          score: () => this.evaluate().score,
-          houseOn: () => this.houseOn,
-          setHouse: (on: boolean) => {
-            this.houseOn = on;
-          },
-          toggle: (kind: string) => {
-            const fixture = this.fixtures.find((f) => f.kind === kind);
-            if (fixture) this.toggle(fixture);
-          },
-          hint: () => this.evaluate().hint,
-        },
-      });
-    }
-    return true;
   }
 
-  // --- Fixtures ------------------------------------------------------------
+  private placeFixture(fixture: Fixture): void {
+    this.v1.copy(fixture.local);
+    this.stage.localToWorld(this.v1);
+    const parent = fixture.object.parent;
+    if (parent) {
+      parent.worldToLocal(this.v1);
+    }
+    fixture.object.position.copy(this.v1);
+  }
 
-  /** A small power switch with a status LED on the light's yoke: green when on. */
-  private makeLed(object: Object3D): MeshStandardMaterial {
-    const box = new Mesh(
-      new BoxGeometry(0.006, 0.004, 0.003),
-      new MeshStandardMaterial({ color: '#1b1b1e', roughness: 0.6 }),
+  private updateAim(): void {
+    this.aimWorld.copy(this.aimLocal);
+    this.stage.localToWorld(this.aimWorld);
+    this.screenWorld.copy(SCREEN_CENTER);
+    this.stage.localToWorld(this.screenWorld);
+  }
+
+  private updateFixture(fixture: Fixture): void {
+    // Stretch the stand from the yoke down to the floor.
+    const height = Math.max(fixture.local.y, 0.014);
+    const poleLength = Math.max(height - 0.012, 0.001);
+    fixture.pole.scale.y = poleLength;
+    fixture.pole.position.y = -0.012 - poleLength / 2;
+    fixture.base.position.y = -height;
+
+    const aim = fixture.item.aim === 'screen' ? this.screenWorld : this.aimWorld;
+    fixture.head.lookAt(aim);
+    fixture.object.getWorldPosition(this.v1);
+    fixture.spot.visible = fixture.on;
+    fixture.spot.position.copy(this.v1);
+    fixture.spot.target.position.copy(aim);
+    fixture.spot.target.updateMatrixWorld();
+    if (fixture.face) {
+      fixture.face.emissiveIntensity = fixture.on ? 1.6 : 0;
+    }
+    fixture.led.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
+  }
+
+  /** A stage-local light position as an orbit around the aim point: azimuth 0 is the camera side, negative is camera-left. */
+  private poseOf(local: Vector3): Pose {
+    const x = local.x - this.aimLocal.x;
+    const y = local.y - this.aimLocal.y;
+    const z = local.z - this.aimLocal.z;
+    const distance = Math.max(Math.hypot(x, y, z), 1e-4);
+    return {
+      azimuth: MathUtils.radToDeg(Math.atan2(x, z)),
+      elevation: MathUtils.radToDeg(Math.asin(MathUtils.clamp(y / distance, -1, 1))),
+      distance,
+    };
+  }
+
+  /** Where a role's light belongs, in stage-local meters. */
+  private roleLocal(role: Role, out: Vector3): Vector3 {
+    if (role.pos) {
+      return out.set(...role.pos);
+    }
+    const { az, el, d } = role.orbit!;
+    const azR = MathUtils.degToRad(az);
+    const elR = MathUtils.degToRad(el);
+    return out.set(
+      this.aimLocal.x + d * Math.sin(azR) * Math.cos(elR),
+      this.aimLocal.y + d * Math.sin(elR),
+      this.aimLocal.z + d * Math.cos(azR) * Math.cos(elR),
     );
-    box.name = 'fixture-switch';
-    box.position.set(0, -0.016, 0.004);
-    const led = new MeshStandardMaterial({ color: '#111', emissive: '#3a1010', emissiveIntensity: 2 });
-    const dot = new Mesh(new BoxGeometry(0.0018, 0.0018, 0.0008), led);
-    dot.position.set(0, 0, 0.0018);
-    box.add(dot);
-    object.add(box);
-    return led;
+  }
+
+  // --- Camera shots ----------------------------------------------------------
+
+  private aimShotCamera(): void {
+    this.lens.getWorldPosition(this.lensWorld);
+    this.shotCamera.position.copy(this.lensWorld);
+    this.shotCamera.lookAt(this.aimWorld.x, this.aimWorld.y - 0.004, this.aimWorld.z);
+    this.shotCamera.updateMatrixWorld();
+  }
+
+  /**
+   * Renders the cine camera's view. The monitor, the card and the camera body
+   * (the shot camera sits inside its lens) are hidden; lights stay visible in
+   * the live shot, so a light parked in frame shows up just as it would on a
+   * real set.
+   */
+  private renderShot(into: WebGLRenderTarget, showFixtures: boolean): void {
+    const renderer = this.world.renderer;
+    const previousTarget = renderer.getRenderTarget();
+    const xrEnabled = renderer.xr.enabled;
+    renderer.xr.enabled = false;
+    this.monitor.visible = false;
+    this.card.mesh.visible = false;
+    this.cameraRig.visible = false;
+    for (const fixture of this.fixtures) {
+      fixture.object.visible = showFixtures;
+      if (fixture.handle) {
+        fixture.handle.visible = false;
+      }
+    }
+    try {
+      renderer.setRenderTarget(into);
+      renderer.render(this.world.scene, this.shotCamera);
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      for (const fixture of this.fixtures) {
+        fixture.object.visible = true;
+        if (fixture.handle) {
+          fixture.handle.visible = true;
+        }
+      }
+      this.cameraRig.visible = true;
+      this.card.mesh.visible = true;
+      this.monitor.visible = true;
+      renderer.xr.enabled = xrEnabled;
+    }
+  }
+
+  /** The target: only the right lights, in the right spots, house lights off, no gear in frame. */
+  private renderTargetShot(): void {
+    for (const fixture of this.fixtures) {
+      fixture.spot.visible = false;
+    }
+    for (const light of this.houseLights) {
+      light.visible = false;
+    }
+    const practicalWasOn = this.practical?.on ?? false;
+    if (this.practical) {
+      this.practical.bulb.intensity = 0.06;
+      this.practical.shade.emissiveIntensity = 1.4;
+    }
+    this.level.roles.forEach((role, i) => {
+      const spot = this.targetSpots[i];
+      this.roleLocal(role, this.v1);
+      this.stage.localToWorld(this.v1);
+      spot.position.copy(this.v1);
+      spot.target.position.copy(role.aim === 'screen' ? this.screenWorld : this.aimWorld);
+      spot.target.updateMatrixWorld();
+      spot.visible = true;
+    });
+    try {
+      this.renderShot(this.targetShot, false);
+    } finally {
+      for (const spot of this.targetSpots) {
+        spot.visible = false;
+      }
+      for (const fixture of this.fixtures) {
+        fixture.spot.visible = fixture.on;
+      }
+      for (const light of this.houseLights) {
+        light.visible = this.houseOn;
+      }
+      if (this.practical) {
+        this.practical.bulb.intensity = practicalWasOn ? 0.06 : 0;
+        this.practical.shade.emissiveIntensity = practicalWasOn ? 1.4 : 0;
+      }
+    }
+  }
+
+  // --- Score -------------------------------------------------------------------
+
+  private fits(role: Role, fixture: Fixture): boolean {
+    return (
+      role.kinds.includes(fixture.item.kind) &&
+      (role.gel ?? 'none') === (fixture.item.gel ?? 'none') &&
+      (role.aim ?? 'cast') === (fixture.item.aim ?? 'cast')
+    );
+  }
+
+  private roleFit(role: Role, local: Vector3): number {
+    if (role.pos) {
+      const d = local.distanceTo(this.v2.set(...role.pos));
+      return Math.exp(-((Math.max(0, d - 0.01) / POSITION_TOLERANCE) ** 2));
+    }
+    const pose = this.poseOf(local);
+    const { az, el, d } = role.orbit!;
+    let dAz = Math.abs(pose.azimuth - az);
+    dAz = Math.min(dAz, 360 - dAz);
+    const dEl = pose.elevation - el;
+    const dDist = Math.log(pose.distance / d);
+    return Math.exp(-((dAz / 25) ** 2) - (dEl / 20) ** 2 - (dDist / 0.35) ** 2);
+  }
+
+  /** Matches switched-on lights to the scene's roles and scores the setup, with one hint. */
+  private evaluate(): { score: number; hint: string } {
+    const level = this.level;
+    const on = this.fixtures.filter((f) => f.on);
+    // Greedy assignment: each role takes its best-fitting switched-on light of the right kind.
+    const used = new Set<Fixture>();
+    const assigned: { role: Role; fixture?: Fixture; fit: number }[] = [];
+    for (const role of level.roles) {
+      let best: Fixture | undefined;
+      let bestFit = -1;
+      for (const fixture of on) {
+        if (used.has(fixture) || !this.fits(role, fixture)) continue;
+        const fit = this.roleFit(role, fixture.local);
+        if (fit > bestFit) {
+          best = fixture;
+          bestFit = fit;
+        }
+      }
+      if (best) used.add(best);
+      assigned.push({ role, fixture: best, fit: best ? bestFit : 0 });
+    }
+    const extras = on.filter((f) => !used.has(f));
+    let fit = assigned.reduce((sum, a) => sum + a.fit, 0) / Math.max(assigned.length, 1);
+    fit *= Math.pow(0.6, extras.length);
+    let score = Math.round(fit * 100);
+
+    if (this.houseOn) {
+      return { score: Math.min(score, 45), hint: 'The house lights flatten everything. Hit the HOUSE switch.' };
+    }
+    if (level.practical && !this.practical?.on) {
+      return { score: Math.min(score, 60), hint: this.immersive ? 'The lamp in the shot is off. Point at it and pinch to switch it on.' : 'The lamp in the shot is off. Click it to switch it on.' };
+    }
+    const missing = assigned.filter((a) => !a.fixture);
+    if (missing.length > 0) {
+      const role = missing[0].role;
+      // Is a wrong light sitting where this role should be?
+      const wrong = extras.find((f) => this.roleFit(role, f.local) > 0.3);
+      if (wrong) {
+        return {
+          score,
+          hint: `Wrong light for the ${role.label.toLowerCase()}: it needs ${role.kindHint}.`,
+        };
+      }
+      const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
+      return { score, hint: on.length === 0 ? (this.immersive ? 'Point at a light in the kit and quick-pinch to switch it on.' : 'Click a light in the kit to switch it on.') : `${label} Use ${role.kindHint}.` };
+    }
+    if (extras.length > 0) {
+      score = Math.min(score, 70);
+      return { score, hint: `Too many lights: switch off the ${itemName(extras[0].item)}.` };
+    }
+    const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
+    return { score, hint: this.placeHint(worst.role, worst.fixture!) };
+  }
+
+  private placeHint(role: Role, fixture: Fixture): string {
+    const name = role.label;
+    if (role.pos) {
+      const dx = role.pos[0] - fixture.local.x;
+      const dz = role.pos[2] - fixture.local.z;
+      const dy = role.pos[1] - fixture.local.y;
+      if (Math.hypot(dx, dz, dy) < 0.02) return 'Almost there. Hold it...';
+      if (Math.abs(dz) > Math.abs(dx) && Math.abs(dz) > 0.02) {
+        return dz < 0 ? `Move the ${name.toLowerCase()} closer to the screen.` : `Pull the ${name.toLowerCase()} away from the screen a bit.`;
+      }
+      if (Math.abs(dx) > 0.02) {
+        return dx < 0 ? `Move the ${name.toLowerCase()} toward camera-left.` : `Move the ${name.toLowerCase()} toward camera-right.`;
+      }
+      return dy > 0 ? `Raise the ${name.toLowerCase()}.` : `Lower the ${name.toLowerCase()}.`;
+    }
+    const pose = this.poseOf(fixture.local);
+    const { az, el, d } = role.orbit!;
+    let dAz = pose.azimuth - az;
+    if (dAz > 180) dAz -= 360;
+    if (dAz < -180) dAz += 360;
+    const dEl = pose.elevation - el;
+    const ratio = pose.distance / d;
+    const lower = name.toLowerCase();
+    // Hint at whichever error costs the most score (same weights as roleFit).
+    const tAz = (dAz / 25) ** 2;
+    const tEl = (dEl / 20) ** 2;
+    const tD = (Math.log(ratio) / 0.35) ** 2;
+    if (tAz + tEl + tD < 0.05) {
+      return 'Almost there. Hold it...';
+    }
+    if (tAz >= tEl && tAz >= tD) {
+      const behind = Math.abs(az) > 100;
+      if (behind && Math.abs(pose.azimuth) < 90) {
+        return `The ${lower} belongs behind the cast. Move it round the back.`;
+      }
+      return dAz > 0 ? `Swing the ${lower} toward camera-left.` : `Swing the ${lower} toward camera-right.`;
+    }
+    if (tEl >= tD) {
+      return dEl < 0 ? `Raise the ${lower}.` : `Lower the ${lower}.`;
+    }
+    return ratio > 1 ? `Bring the ${lower} closer.` : `Pull the ${lower} back a bit.`;
+  }
+
+  private updateScore(delta: number): void {
+    this.checkCreature(delta);
+    if (this.phase !== 'playing') {
+      return;
+    }
+    const { score, hint } = this.evaluate();
+    this.holdTime = score >= this.level.winScore ? this.holdTime + delta : 0;
+    if (this.holdTime >= WIN_HOLD_SECONDS) {
+      this.phase = 'won';
+      this.chime.play().catch(() => undefined);
+      this.drawLabel(score, 'DIRECTOR: "That\'s the look! Who ARE you?"', this.level.lesson);
+      this.showWinCard();
+      return;
+    }
+    const text = `${score}|${hint}|${this.creature.active}`;
+    if (text !== this.shownText) {
+      this.shownText = text;
+      this.drawLabel(score, `MATCH ${score}%`, hint);
+    }
+  }
+
+  /** A hard light low in front of a face, held a moment, with the house lights off. */
+  private checkCreature(delta: number): void {
+    if (this.creature.active) {
+      if (!this.shownText.endsWith('|true')) {
+        this.shownText = '';
+      }
+      return;
+    }
+    if (this.creature.played || this.houseOn || this.level.actors.length === 0) {
+      return;
+    }
+    const monster = this.fixtures.some((f) => {
+      if (!f.on || (f.item.kind !== 'fresnel' && f.item.kind !== 'par')) return false;
+      const pose = this.poseOf(f.local);
+      return pose.elevation < -18 && Math.abs(pose.azimuth) < 40 && pose.distance < 0.2;
+    });
+    this.creatureHold = monster ? this.creatureHold + delta : 0;
+    if (this.creatureHold > 1.5) {
+      this.creature.play();
+      this.shownText = '';
+    }
+  }
+
+  // --- Monitor and card ------------------------------------------------------
+
+  private buildMonitor(): void {
+    this.monitor = new Group();
+    this.monitor.name = 'camera-monitor';
+    const frame = new Mesh(
+      new BoxGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075, 0.008),
+      new MeshBasicMaterial({ color: '#0b0b0d' }),
+    );
+    frame.position.set(0, 0.0, -0.005);
+    const targetPlane = new Mesh(
+      new PlaneGeometry(MONITOR_W, MONITOR_H),
+      new MeshBasicMaterial({ map: this.targetShot.texture, toneMapped: false }),
+    );
+    targetPlane.name = 'monitor-target';
+    targetPlane.position.set(0, MONITOR_H / 2 + 0.022, 0);
+    this.liveMaterial = new MeshBasicMaterial({ map: this.shotTarget.texture, toneMapped: false });
+    this.creature.install(this.liveMaterial);
+    const livePlane = new Mesh(new PlaneGeometry(MONITOR_W, MONITOR_H), this.liveMaterial);
+    livePlane.name = 'monitor-live';
+    livePlane.position.set(0, -MONITOR_H / 2 + 0.002, 0);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    this.label = { canvas, texture };
+    const overlay = new Mesh(
+      new PlaneGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075),
+      new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
+    );
+    overlay.name = 'monitor-labels';
+    overlay.position.z = 0.0005;
+
+    this.monitor.add(frame, targetPlane, livePlane, overlay);
+    // Beside the stage, on the camera's side, angled toward the player.
+    this.monitor.position.set(0.43, 0.16, 0.08);
+    this.monitor.rotation.y = -0.35;
+    this.stage.add(this.monitor);
+  }
+
+  private drawLabel(score: number, line1: string, line2: string): void {
+    const { canvas, texture } = this.label;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return;
+    }
+    // The canvas maps onto the whole monitor face.
+    const sx = canvas.width / (MONITOR_W + 0.02);
+    const sy = canvas.height / (MONITOR_H * 2 + 0.075);
+    const toY = (metersFromTop: number) => metersFromTop * sy;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = 'bold 34px system-ui, sans-serif';
+    ctx.fillStyle = '#f5d90a';
+    ctx.fillText('TARGET', 0.012 * sx, toY(0.014));
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('YOUR SHOT', 0.012 * sx, toY(0.0145 + MONITOR_H + 0.012));
+    if (this.creature.active) {
+      this.creature.drawTitle(ctx, 0.01 * sx, toY(0.0145 + MONITOR_H + 0.02), MONITOR_W * sx, MONITOR_H * sy);
+      line1 = 'DIRECTOR: "...Universal is on line two."';
+    }
+
+    const barTop = toY(0.03 + MONITOR_H * 2);
+    const barWidth = canvas.width - 0.024 * sx;
+    const won = this.phase !== 'playing' && this.phase !== 'title';
+    ctx.fillStyle = '#2b2b30';
+    ctx.fillRect(0.012 * sx, barTop, barWidth, 30);
+    ctx.fillStyle = won ? '#4ade80' : score >= 70 ? '#f5d90a' : '#f97316';
+    ctx.fillRect(0.012 * sx, barTop, (barWidth * score) / 100, 30);
+    ctx.font = 'bold 40px system-ui, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(line1, 0.012 * sx, barTop + 78);
+    ctx.font = '30px system-ui, sans-serif';
+    ctx.fillStyle = '#d4d4d8';
+    const lines = wrap(ctx, line2, barWidth);
+    lines.slice(0, 2).forEach((line, i) => ctx.fillText(line, 0.012 * sx, barTop + 122 + i * 36));
+    texture.needsUpdate = true;
+  }
+
+  private buildCard(): void {
+    const mesh = this.card.mesh;
+    // Left of the stage, angled toward the player, like a call sheet on a stand.
+    this.stage.getWorldPosition(this.v1);
+    mesh.position.set(this.v1.x - 0.43, this.v1.y + 0.33, this.v1.z + 0.05);
+    mesh.rotation.set(-0.1, 0.5, 0);
+    this.cardEntity = this.world.createTransformEntity(mesh);
+    this.cardEntity.addComponent(RayInteractable);
   }
 
   /**
@@ -473,316 +1286,32 @@ export class LightingLevelSystem extends createSystem({
     );
     label.position.set(0.006, 0, 0.0045);
     plate.add(body, led, label);
-    // Placed by the stage (which is never rotated), as its own scene-level entity
-    // so the input system marks it Pressed for a mouse click, a ray or a poke.
+    // Placed by the stage (which is never rotated), as its own scene-level entity.
     plate.position.set(-STAGE_WIDTH / 2 - 0.05, 0.06, STAGE_DEPTH / 2 + 0.06);
     this.stage.localToWorld(plate.position);
     plate.rotation.set(-0.5, 0.4, 0);
-    this.houseSwitch = this.world.createTransformEntity(plate);
-    this.houseSwitch.addComponent(RayInteractable);
+    this.houseSwitch = this.createSwitch(plate.position, 0, () => {
+      this.houseOn = !this.houseOn;
+      devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
+      this.resetHold();
+    }, plate);
   }
 
-  private clampToSet(local: Vector3): void {
-    local.x = MathUtils.clamp(local.x, -BOUNDS_X, BOUNDS_X);
-    local.y = MathUtils.clamp(local.y, MIN_HEIGHT, MAX_HEIGHT);
-    local.z = MathUtils.clamp(local.z, BOUNDS_BACK, BOUNDS_FRONT);
-    // Push the light out of the actor if it was dropped on top of him.
-    this.headLocal(this.v2);
-    const dx = local.x - this.v2.x;
-    const dz = local.z - this.v2.z;
-    const flat = Math.hypot(dx, dz);
-    if (flat < SUBJECT_CLEARANCE && local.y < this.v2.y + 0.03) {
-      const scale = SUBJECT_CLEARANCE / Math.max(flat, 1e-4);
-      local.x = this.v2.x + (flat > 1e-4 ? dx * scale : SUBJECT_CLEARANCE);
-      local.z = this.v2.z + (flat > 1e-4 ? dz * scale : 0);
-    }
-  }
+  // --- Test helper -------------------------------------------------------------
 
-  private placeFixture(fixture: Fixture): void {
-    this.v1.copy(fixture.local);
-    this.stage.localToWorld(this.v1);
-    const parent = fixture.object.parent;
-    if (parent) {
-      parent.worldToLocal(this.v1);
+  /** Puts the right lights in the right places (used by the automated playthrough test). */
+  private solve(): void {
+    this.houseOn = false;
+    if (this.practical) this.practical.on = true;
+    const used = new Set<Fixture>();
+    for (const fixture of this.fixtures) fixture.on = false;
+    for (const role of this.level.roles) {
+      const fixture = this.fixtures.find((f) => !used.has(f) && this.fits(role, f));
+      if (!fixture) continue;
+      used.add(fixture);
+      fixture.on = true;
+      this.roleLocal(role, fixture.local);
     }
-    fixture.object.position.copy(this.v1);
-  }
-
-  private updateFixture(fixture: Fixture): void {
-    // Stretch the stand from the yoke down to the floor.
-    const height = Math.max(fixture.local.y, 0.014);
-    const poleLength = Math.max(height - 0.012, 0.001);
-    fixture.pole.scale.y = poleLength;
-    fixture.pole.position.y = -0.012 - poleLength / 2;
-    fixture.base.position.y = -height;
-
-    fixture.head.lookAt(this.headWorld);
-    fixture.object.getWorldPosition(this.v1);
-    fixture.spot.visible = fixture.on;
-    fixture.spot.position.copy(this.v1);
-    fixture.spot.target.position.copy(this.headWorld);
-    fixture.spot.target.updateMatrixWorld();
-    if (fixture.face) {
-      fixture.face.emissiveIntensity = fixture.on ? 1.6 : 0;
-    }
-    fixture.led?.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
-  }
-
-  private headLocal(out: Vector3): Vector3 {
-    this.head.getWorldPosition(out);
-    return this.stage.worldToLocal(out);
-  }
-
-  /** A stage-local light position as an orbit around the head: azimuth 0 is the camera side, negative is camera-left. */
-  private poseOf(local: Vector3): Pose {
-    this.headLocal(this.v2);
-    const x = local.x - this.v2.x;
-    const y = local.y - this.v2.y;
-    const z = local.z - this.v2.z;
-    const distance = Math.max(Math.hypot(x, y, z), 1e-4);
-    return {
-      azimuth: MathUtils.radToDeg(Math.atan2(x, z)),
-      elevation: MathUtils.radToDeg(Math.asin(MathUtils.clamp(y / distance, -1, 1))),
-      distance,
-    };
-  }
-
-  private poseToWorld(pose: Pose, out: Vector3): Vector3 {
-    const az = MathUtils.degToRad(pose.azimuth);
-    const el = MathUtils.degToRad(pose.elevation);
-    this.headLocal(out);
-    out.x += pose.distance * Math.sin(az) * Math.cos(el);
-    out.y += pose.distance * Math.sin(el);
-    out.z += pose.distance * Math.cos(az) * Math.cos(el);
-    return this.stage.localToWorld(out);
-  }
-
-  // --- Camera shots ----------------------------------------------------------
-
-  private aimShotCamera(): void {
-    this.lens.getWorldPosition(this.lensWorld);
-    this.shotCamera.position.copy(this.lensWorld);
-    this.shotCamera.lookAt(this.headWorld.x, this.headWorld.y - 0.004, this.headWorld.z);
-    this.shotCamera.updateMatrixWorld();
-  }
-
-  /**
-   * Renders the cine camera's view. The monitor and the camera body (the shot
-   * camera sits inside its lens) are hidden; lights stay visible in the live
-   * shot, so a light parked in frame shows up just as it would on a real set.
-   */
-  private renderShot(into: WebGLRenderTarget, showFixtures: boolean): void {
-    const renderer = this.world.renderer;
-    const previousTarget = renderer.getRenderTarget();
-    const xrEnabled = renderer.xr.enabled;
-    renderer.xr.enabled = false;
-    this.monitor.visible = false;
-    this.cameraRig.visible = false;
-    for (const fixture of this.fixtures) {
-      fixture.object.visible = showFixtures;
-      if (fixture.handle) {
-        fixture.handle.visible = false;
-      }
-    }
-    try {
-      renderer.setRenderTarget(into);
-      renderer.render(this.world.scene, this.shotCamera);
-    } finally {
-      renderer.setRenderTarget(previousTarget);
-      this.restoreAfterShot(xrEnabled);
-    }
-  }
-
-  private restoreAfterShot(xrEnabled: boolean): void {
-    const renderer = this.world.renderer;
-    for (const fixture of this.fixtures) {
-      fixture.object.visible = true;
-      if (fixture.handle) {
-        fixture.handle.visible = true;
-      }
-    }
-    this.cameraRig.visible = true;
-    this.monitor.visible = true;
-    renderer.xr.enabled = xrEnabled;
-  }
-
-  /** The target: only the right light, in the right spot, and no gear in frame. */
-  private renderTargetShot(): void {
-    for (const fixture of this.fixtures) {
-      fixture.spot.visible = false;
-    }
-    for (const light of this.houseLights) {
-      light.visible = false;
-    }
-    this.poseToWorld(this.target, this.v1);
-    this.targetSpot.position.copy(this.v1);
-    this.targetSpot.target.position.copy(this.headWorld);
-    this.targetSpot.target.updateMatrixWorld();
-    this.targetSpot.visible = true;
-    this.renderShot(this.targetShot, false);
-    this.targetSpot.visible = false;
-    for (const fixture of this.fixtures) {
-      fixture.spot.visible = fixture.on;
-    }
-    for (const light of this.houseLights) {
-      light.visible = this.houseOn;
-    }
-  }
-
-  // --- Score -------------------------------------------------------------------
-
-  private poseFit(pose: Pose): number {
-    let dAz = Math.abs(pose.azimuth - this.target.azimuth);
-    dAz = Math.min(dAz, 360 - dAz);
-    const dEl = pose.elevation - this.target.elevation;
-    const dDist = Math.log(pose.distance / this.target.distance);
-    return Math.exp(-((dAz / 25) ** 2) - (dEl / 20) ** 2 - (dDist / 0.35) ** 2);
-  }
-
-  private evaluate(): { score: number; hint: string } {
-    const on = this.fixtures.filter((fixture) => fixture.on);
-    const right = on.find((fixture) => fixture.kind === this.targetKind);
-    const extras = on.filter((fixture) => fixture.kind !== this.targetKind);
-    if (this.houseOn) {
-      return {
-        score: on.length === 0 ? 0 : Math.min(45, Math.round(this.poseFit(this.poseOf(on[0].local)) * 45)),
-        hint: 'The house lights flatten everything. Hit the HOUSE switch.',
-      };
-    }
-    if (on.length === 0) {
-      return { score: 0, hint: 'Click a light in the kit to switch it on.' };
-    }
-    if (!right) {
-      const fit = this.poseFit(this.poseOf(extras[0].local));
-      return {
-        score: Math.round(fit * 40),
-        hint: 'See the hard shadow under the nose? The target uses a softer light.',
-      };
-    }
-    const pose = this.poseOf(right.local);
-    const fit = this.poseFit(pose);
-    if (extras.length > 0) {
-      return {
-        score: Math.round(fit * 55),
-        hint: 'Too many lights. Click the extra one to switch it off.',
-      };
-    }
-    return { score: Math.round(fit * 100), hint: this.poseHint(pose) };
-  }
-
-  private poseHint(pose: Pose): string {
-    let dAz = pose.azimuth - this.target.azimuth;
-    if (dAz > 180) dAz -= 360;
-    if (dAz < -180) dAz += 360;
-    const dEl = pose.elevation - this.target.elevation;
-    const ratio = pose.distance / this.target.distance;
-    if (Math.abs(pose.azimuth) > 110) {
-      return "The light is behind the talent. Bring it round to the front.";
-    }
-    if (Math.abs(dAz) > 12) {
-      return dAz > 0 ? 'Swing the light toward camera-left.' : 'Swing the light back toward the camera.';
-    }
-    if (Math.abs(dEl) > 10) {
-      return dEl < 0 ? 'Raise the light above eye level.' : 'Lower the light a little.';
-    }
-    if (Math.abs(Math.log(ratio)) > 0.2) {
-      return ratio > 1 ? 'Bring the light closer.' : 'Pull the light back a bit.';
-    }
-    return 'Almost there. Hold it...';
-  }
-
-  private updateScore(delta: number): void {
-    if (this.won) {
-      return;
-    }
-    const { score, hint } = this.evaluate();
-    this.holdTime = score >= WIN_SCORE ? this.holdTime + delta : 0;
-    if (this.holdTime >= WIN_HOLD_SECONDS) {
-      this.won = true;
-      this.chime.play().catch(() => undefined);
-      this.drawLabel(score, 'DIRECTOR: "That\'s the look! Who ARE you?"', 'Soft key, 45° to the side, a little above the eyes.');
-      return;
-    }
-    const text = `${score}|${hint}`;
-    if (text !== this.shownText) {
-      this.shownText = text;
-      this.drawLabel(score, `MATCH ${score}%`, hint);
-    }
-  }
-
-  // --- Monitor -------------------------------------------------------------
-
-  private buildMonitor(): void {
-    this.monitor = new Group();
-    this.monitor.name = 'camera-monitor';
-    const frame = new Mesh(
-      new BoxGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075, 0.008),
-      new MeshBasicMaterial({ color: '#0b0b0d' }),
-    );
-    frame.position.set(0, 0.0, -0.005);
-    const targetPlane = new Mesh(
-      new PlaneGeometry(MONITOR_W, MONITOR_H),
-      new MeshBasicMaterial({ map: this.targetShot.texture, toneMapped: false }),
-    );
-    targetPlane.name = 'monitor-target';
-    targetPlane.position.set(0, MONITOR_H / 2 + 0.022, 0);
-    const livePlane = new Mesh(
-      new PlaneGeometry(MONITOR_W, MONITOR_H),
-      new MeshBasicMaterial({ map: this.shotTarget.texture, toneMapped: false }),
-    );
-    livePlane.name = 'monitor-live';
-    livePlane.position.set(0, -MONITOR_H / 2 + 0.002, 0);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    this.label = { canvas, texture };
-    const overlay = new Mesh(
-      new PlaneGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075),
-      new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
-    );
-    overlay.name = 'monitor-labels';
-    overlay.position.z = 0.0005;
-
-    this.monitor.add(frame, targetPlane, livePlane, overlay);
-    // Beside the stage, on the camera's side, angled toward the player.
-    this.monitor.position.set(0.43, 0.16, 0.08);
-    this.monitor.rotation.y = -0.35;
-    this.stage.add(this.monitor);
-  }
-
-  private drawLabel(score: number, line1: string, line2: string): void {
-    const { canvas, texture } = this.label;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-    // The canvas maps onto the whole monitor face.
-    const sx = canvas.width / (MONITOR_W + 0.02);
-    const sy = canvas.height / (MONITOR_H * 2 + 0.075);
-    const toY = (metersFromTop: number) => metersFromTop * sy;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = 'bold 34px system-ui, sans-serif';
-    ctx.fillStyle = '#f5d90a';
-    ctx.fillText('TARGET', 0.012 * sx, toY(0.014));
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('YOUR SHOT', 0.012 * sx, toY(0.0145 + MONITOR_H + 0.012));
-
-    const barTop = toY(0.03 + MONITOR_H * 2);
-    const barWidth = canvas.width - 0.024 * sx;
-    ctx.fillStyle = '#2b2b30';
-    ctx.fillRect(0.012 * sx, barTop, barWidth, 30);
-    ctx.fillStyle = this.won ? '#4ade80' : score >= 70 ? '#f5d90a' : '#f97316';
-    ctx.fillRect(0.012 * sx, barTop, (barWidth * score) / 100, 30);
-    ctx.font = 'bold 40px system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(line1, 0.012 * sx, barTop + 78);
-    ctx.font = '30px system-ui, sans-serif';
-    ctx.fillStyle = '#d4d4d8';
-    ctx.fillText(line2, 0.012 * sx, barTop + 122);
-    texture.needsUpdate = true;
   }
 
   // --- Desktop view and mouse controls ------------------------------------
@@ -811,12 +1340,9 @@ export class LightingLevelSystem extends createSystem({
     camera.lookAt(this.pivot);
   }
 
-  private setPointerRay(event: PointerEvent): void {
+  private setPointerRay(x: number, y: number): void {
     const rect = this.world.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.set(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1,
-    );
+    this.pointerNdc.set(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.world.camera);
   }
 
@@ -827,33 +1353,46 @@ export class LightingLevelSystem extends createSystem({
     this.lastPointer.set(event.clientX, event.clientY);
     this.downPointer.set(event.clientX, event.clientY);
     this.dragMoved = false;
-    this.setPointerRay(event);
-    // A click on the HOUSE switch flips it on release, and doesn't turn the view.
-    if (this.raycaster.intersectObject(this.houseSwitch.object3D!, true).length > 0) {
-      this.pressingHouse = true;
+    this.pressing = null;
+    this.setPointerRay(event.clientX, event.clientY);
+
+    // Find the nearest thing under the pointer: a light, a switch or the card.
+    let nearest = Infinity;
+    let fixtureHit: Fixture | null = null;
+    let press: (() => void) | null = null;
+    for (const fixture of this.fixtures) {
+      const hit = this.raycaster.intersectObject(fixture.object, true)[0];
+      if (hit && hit.distance < nearest) {
+        nearest = hit.distance;
+        fixtureHit = fixture;
+        press = null;
+      }
+    }
+    for (const sw of this.switches) {
+      const hit = this.raycaster.intersectObject(sw.hit, true)[0];
+      if (hit && hit.distance < nearest) {
+        nearest = hit.distance;
+        fixtureHit = null;
+        press = sw.toggle;
+      }
+    }
+    const cardHit = this.raycaster.intersectObject(this.card.mesh, false)[0];
+    if (cardHit && cardHit.distance < nearest) {
+      fixtureHit = null;
+      press = () => this.pressCard();
+    }
+
+    if (press) {
+      // Switches and the card act on release, if the pointer didn't drag.
+      this.pressing = press;
       return;
     }
-    if (event.button === 0) {
-      let best: { fixture: Fixture; distance: number } | null = null;
-      for (const fixture of this.fixtures) {
-        const hit = this.raycaster.intersectObject(fixture.object, true)[0];
-        if (hit && (!best || hit.distance < best.distance)) {
-          best = { fixture, distance: hit.distance };
-        }
-      }
-      if (best) {
-        // Drag in the horizontal plane at the light's height.
-        this.dragged = best.fixture;
-        best.fixture.object.getWorldPosition(this.v1);
-        this.dragPlane.setFromNormalAndCoplanarPoint(this.v2.set(0, 1, 0), this.v1);
-        if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v2)) {
-          this.dragOffset.copy(this.v1).sub(this.v2);
-        } else {
-          this.dragOffset.set(0, 0, 0);
-        }
-        event.preventDefault();
-        return;
-      }
+    if (fixtureHit && event.button === 0) {
+      // Drag in the horizontal plane at the light's height.
+      this.dragged = fixtureHit;
+      this.resetDragPlane(fixtureHit);
+      event.preventDefault();
+      return;
     }
     this.orbiting = true;
   }
@@ -866,9 +1405,12 @@ export class LightingLevelSystem extends createSystem({
       // Shift-drag raises and lowers the held light.
       const dy = event.clientY - this.lastPointer.y;
       this.dragged.local.y = MathUtils.clamp(this.dragged.local.y - dy * 0.0008, MIN_HEIGHT, MAX_HEIGHT);
+      this.lastPointer.set(event.clientX, event.clientY);
       this.resetDragPlane(this.dragged);
-    } else if (this.dragged) {
-      this.setPointerRay(event);
+      return;
+    }
+    if (this.dragged) {
+      this.setPointerRay(event.clientX, event.clientY);
       if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v1)) {
         this.v1.add(this.dragOffset);
         this.stage.worldToLocal(this.v1);
@@ -884,34 +1426,30 @@ export class LightingLevelSystem extends createSystem({
     this.lastPointer.set(event.clientX, event.clientY);
   }
 
-  /** Re-anchors the horizontal drag plane at the held light's current height. */
-  private resetDragPlane(fixture: Fixture): void {
-    this.v1.copy(fixture.local);
-    this.stage.localToWorld(this.v1);
-    this.dragPlane.setFromNormalAndCoplanarPoint(this.v2.set(0, 1, 0), this.v1);
-    this.setPointerRayFrom(this.lastPointer);
-    if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v2)) {
-      this.dragOffset.copy(this.v1).sub(this.v2);
-    }
-  }
-
-  private setPointerRayFrom(point: Vector2): void {
-    const rect = this.world.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.set(((point.x - rect.left) / rect.width) * 2 - 1, -((point.y - rect.top) / rect.height) * 2 + 1);
-    this.raycaster.setFromCamera(this.pointerNdc, this.world.camera);
-  }
-
   private onPointerUp(): void {
     // A click on a light that didn't drag it flips its switch.
     if (this.dragged && !this.dragMoved) {
       this.toggle(this.dragged);
     }
-    if (this.pressingHouse && !this.dragMoved) {
-      this.toggleHouse();
+    if (this.pressing && !this.dragMoved) {
+      this.pressing();
     }
-    this.pressingHouse = false;
+    this.pressing = null;
     this.dragged = null;
     this.orbiting = false;
+  }
+
+  /** Re-anchors the horizontal drag plane at the held light's current height. */
+  private resetDragPlane(fixture: Fixture): void {
+    this.v1.copy(fixture.local);
+    this.stage.localToWorld(this.v1);
+    this.dragPlane.setFromNormalAndCoplanarPoint(this.v2.set(0, 1, 0), this.v1);
+    this.setPointerRay(this.lastPointer.x, this.lastPointer.y);
+    if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v2)) {
+      this.dragOffset.copy(this.v1).sub(this.v2);
+    } else {
+      this.dragOffset.set(0, 0, 0);
+    }
   }
 
   private onWheel(event: WheelEvent): void {
@@ -921,14 +1459,14 @@ export class LightingLevelSystem extends createSystem({
     event.preventDefault();
     if (this.dragged) {
       // Raise or lower the held light, and keep dragging at its new height.
-      this.dragged.local.y = MathUtils.clamp(
-        this.dragged.local.y - event.deltaY * 0.00015,
-        MIN_HEIGHT,
-        MAX_HEIGHT,
-      );
+      this.dragged.local.y = MathUtils.clamp(this.dragged.local.y - event.deltaY * 0.00015, MIN_HEIGHT, MAX_HEIGHT);
       this.resetDragPlane(this.dragged);
       return;
     }
     this.orbit.radius = MathUtils.clamp(this.orbit.radius * Math.exp(event.deltaY * 0.001), 0.2, 1.6);
   }
 }
+
+// Card size is exported for layout tests and docs.
+export const CARD_SIZE = { width: CARD_WIDTH, height: CARD_HEIGHT };
+export type { CardContent };
