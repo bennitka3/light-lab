@@ -47,6 +47,17 @@
     color: #dddfe3;
   }
 
+  .note {
+    color: #6b5a00;
+    font-size: 17px;
+    line-height: 24px;
+    margin-top: 6px;
+  }
+
+  .note:dark {
+    color: #f5d90a;
+  }
+
   .button {
     justify-content: flex-start;
     margin-left: 22px;
@@ -62,15 +73,17 @@
   <div class="panel-content">
     <div class="eyebrow">LUCKY BREAK - SCENE 1</div>
     <div class="heading">"You! Lighting! Make the talent look good."</div>
-    <div class="body">Grab the softbox and move it until your</div>
-    <div class="body">shot matches the target on the monitor.</div>
-    <div class="body">Mouse: drag the light. Scroll: closer or farther.</div>
+    <div class="body">Pick a light from the kit, move it past the</div>
+    <div class="body">tape, and match the target on the monitor.</div>
+    <div id="desktop-help" class="body">Drag a light to move it. Scroll while dragging</div>
+    <div id="desktop-help-2" class="body">to raise it. Drag empty space to turn the set.</div>
+    <div id="headset-note" class="note">On a Quest? Open this page in its browser.</div>
   </div>
   <Button id="xr-button" class="button">
     <ButtonIcon>
       <RectangleGoggles></RectangleGoggles>
     </ButtonIcon>
-    <ButtonLabel class="button-label">Enter XR</ButtonLabel>
+    <ButtonLabel class="button-label">Play in your room</ButtonLabel>
   </Button>
   <Button id="exit-button" class="button" style="display: none">
     <ButtonIcon>

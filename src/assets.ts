@@ -1,6 +1,6 @@
 import { AssetType, defineAssets } from '@iwsdk/core';
 import {
-  createSoftbox,
+  createFixture,
   createSoundstage,
 } from './scene-assets/soundstage.scene-asset.js';
 
@@ -9,7 +9,9 @@ const publicAssetUrl = (filePath: string): string =>
 
 export default defineAssets({
   soundstage: createSoundstage(),
-  softbox: createSoftbox(),
+  softbox: createFixture('softbox'),
+  fresnel: createFixture('fresnel'),
+  par: createFixture('par'),
   'welcome-panel': {
     url: publicAssetUrl('ui/welcome.uikitml'),
     type: AssetType.UIKitML,

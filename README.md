@@ -6,12 +6,15 @@ and you light it to match the director's target shot.
 
 ## Scene 1: social clip (soft key)
 
-A tabletop soundstage with one cast member and a cine camera. Move the softbox
-until "your shot" on the camera monitor matches the target. Hold a match of 90%
-or more and the director signs off.
+A tabletop soundstage with one cast member and a cine camera. Three lights wait
+in the kit behind the tape: a softbox, a Fresnel and a PAR can. A light switches
+on once it is moved past the tape. Pick the right one, place it until "your
+shot" on the camera monitor matches the target, and hold a match of 90% or more
+for the director to sign off.
 
-- Headset: pinch or grab the softbox (hands or controllers).
-- Desktop browser: drag the softbox with the mouse; scroll to move it closer or farther.
+- Headset: pinch or grab a light (hands or controllers).
+- Desktop browser: drag a light across the set; scroll while dragging to raise
+  or lower it. Drag empty space to turn the view, scroll to zoom.
 
 ## Develop
 

@@ -1,4 +1,4 @@
 import { defineComponents } from '@iwsdk/core';
-import { KeyLightRig, LightingStage } from './lighting-components.js';
+import { StageLight, LightingStage } from './lighting-components.js';
 
-export default defineComponents([LightingStage, KeyLightRig]);
+export default defineComponents([LightingStage, StageLight]);

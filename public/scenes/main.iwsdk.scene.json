@@ -21,7 +21,7 @@
         0.18,
         1
       ],
-      "intensity": 0.1
+      "intensity": 0.14
     }
   },
   "environment": {
@@ -50,22 +50,26 @@
       },
       "components": {
         "LightingStage": {
-          "levelId": "scene-1-social-clip"
+          "levelId": "scene-1-social-clip",
+          "targetKind": "softbox",
+          "targetAzimuthDeg": -45,
+          "targetElevationDeg": 35,
+          "targetDistance": 0.16
         }
       }
     },
     {
-      "id": "softbox",
-      "name": "Softbox (key light)",
+      "id": "fresnel",
+      "name": "Fresnel (hard light)",
       "content": {
         "type": "asset",
-        "asset": "softbox"
+        "asset": "fresnel"
       },
       "transform": {
         "position": [
-          0,
-          0.845,
-          -0.41
+          -0.12,
+          0.79,
+          -0.28
         ]
       },
       "components": {
@@ -81,14 +85,75 @@
           "rotate": false,
           "translate": true
         },
-        "KeyLightRig": {
-          "intensity": 0.25,
-          "targetAzimuthDeg": -45,
-          "targetElevationDeg": 35,
-          "targetDistance": 0.16,
-          "startAzimuthDeg": 70,
-          "startElevationDeg": 5,
-          "startDistance": 0.22
+        "StageLight": {
+          "kind": "fresnel",
+          "kitX": -0.12
+        }
+      }
+    },
+    {
+      "id": "softbox",
+      "name": "Softbox (soft light)",
+      "content": {
+        "type": "asset",
+        "asset": "softbox"
+      },
+      "transform": {
+        "position": [
+          0.0,
+          0.79,
+          -0.28
+        ]
+      },
+      "components": {
+        "RayInteractable": {},
+        "DistanceGrabbable": {
+          "movementMode": "MoveFromTarget",
+          "rotate": false,
+          "scale": false,
+          "translate": true,
+          "returnToOrigin": false
+        },
+        "OneHandGrabbable": {
+          "rotate": false,
+          "translate": true
+        },
+        "StageLight": {
+          "kind": "softbox",
+          "kitX": 0.0
+        }
+      }
+    },
+    {
+      "id": "par",
+      "name": "PAR can (hard light)",
+      "content": {
+        "type": "asset",
+        "asset": "par"
+      },
+      "transform": {
+        "position": [
+          0.12,
+          0.79,
+          -0.28
+        ]
+      },
+      "components": {
+        "RayInteractable": {},
+        "DistanceGrabbable": {
+          "movementMode": "MoveFromTarget",
+          "rotate": false,
+          "scale": false,
+          "translate": true,
+          "returnToOrigin": false
+        },
+        "OneHandGrabbable": {
+          "rotate": false,
+          "translate": true
+        },
+        "StageLight": {
+          "kind": "par",
+          "kitX": 0.12
         }
       }
     },
