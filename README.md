@@ -28,7 +28,10 @@ GitHub Pages (`.github/workflows/pages.yml`).
 
 ## Layout
 
-- `src/scene-assets/soundstage.scene-asset.ts`: the set, the cast member, the camera and the softbox.
+- `src/scene-assets/soundstage.scene-asset.ts`: the set, the camera and the light fixtures.
+- `src/scene-assets/set-dressing.ts`: director's chair, C-stand, sandbags, apple boxes, cables, tape marks.
+- `public/models/actor-seated.glb`: the cast member, a [Microsoft Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox)
+  avatar (MIT license) posed seated and baked in Blender; its `subject-head` node is what the lights aim at.
 - `src/lighting-level.ts`: the key light, the camera monitor, the match score and the desktop controls.
 - `src/lighting-components.ts`: per-level data (target light position, start position).
 - `public/scenes/main.iwsdk.scene.json`: where everything sits in the scene.

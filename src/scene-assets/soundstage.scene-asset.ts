@@ -1,14 +1,24 @@
 import {
   BoxGeometry,
-  CapsuleGeometry,
-  ConeGeometry,
   CylinderGeometry,
   Group,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  Object3D,
   SphereGeometry,
+  Vector3,
 } from '@iwsdk/core';
+import {
+  SCALE,
+  createAppleBoxes,
+  createCStand,
+  createCable,
+  createDirectorsChair,
+  createSandbag,
+  createSlate,
+  createTeeMark,
+} from './set-dressing.js';
 
 /**
  * Level 1 set: a tabletop black-box soundstage about 50 cm wide that sits on
@@ -38,22 +48,6 @@ const gridMaterial = new MeshStandardMaterial({
   color: '#3a3a3e',
   roughness: 0.6,
   metalness: 0.6,
-});
-const skinMaterial = new MeshStandardMaterial({
-  color: '#d9a88a',
-  roughness: 0.7,
-});
-const hairMaterial = new MeshStandardMaterial({
-  color: '#3b2a20',
-  roughness: 0.8,
-});
-const shirtMaterial = new MeshStandardMaterial({
-  color: '#4f6fa3',
-  roughness: 0.85,
-});
-const stoolMaterial = new MeshStandardMaterial({
-  color: '#8a6a4a',
-  roughness: 0.7,
 });
 const gearMaterial = new MeshStandardMaterial({
   color: '#1f1f22',
@@ -88,60 +82,21 @@ function box(
   return mesh;
 }
 
+/**
+ * Where the cast member sits. The actor himself is a glTF (`actor-seated` in
+ * the manifest) placed as a child node of the stage in the scene JSON, scaled
+ * 1:14, with his "subject-head" anchor landing at (0, HEAD_HEIGHT, -0.06).
+ * This group holds the tall director's chair he sits on and his floor mark.
+ */
 function createSubject(): Group {
   const subject = new Group();
   subject.name = 'subject';
-
-  const seat = new Mesh(new CylinderGeometry(0.016, 0.016, 0.006, 20), stoolMaterial);
-  seat.position.y = 0.045;
-  const leg = new Mesh(new CylinderGeometry(0.003, 0.004, 0.045, 8), stoolMaterial);
-  leg.position.y = 0.0225;
-
-  const torso = new Mesh(new CapsuleGeometry(0.016, 0.03, 6, 16), shirtMaterial);
-  torso.position.y = 0.072;
-  torso.scale.set(1.15, 1, 0.8);
-
-  const neck = new Mesh(new CylinderGeometry(0.005, 0.006, 0.01, 12), skinMaterial);
-  neck.position.y = 0.093;
-
-  // The head carries the face details that make lighting readable: a nose
-  // that casts a shadow, a brow, and ears.
-  const head = new Group();
-  head.name = 'subject-head';
-  head.position.y = HEAD_HEIGHT;
-  const skull = new Mesh(new SphereGeometry(0.0115, 32, 24), skinMaterial);
-  skull.scale.set(0.92, 1.08, 1);
-  const hair = new Mesh(
-    new SphereGeometry(0.012, 32, 16, 0, Math.PI * 2, 0, Math.PI * 0.45),
-    hairMaterial,
-  );
-  hair.position.set(0, 0.002, -0.0012);
-  hair.rotation.x = -0.25;
-  const nose = new Mesh(new ConeGeometry(0.0022, 0.006, 12), skinMaterial);
-  nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, -0.0008, 0.0118);
-  const brow = new Mesh(new BoxGeometry(0.012, 0.0018, 0.003), skinMaterial);
-  brow.position.set(0, 0.0035, 0.0102);
-  const earGeometry = new SphereGeometry(0.0028, 12, 8);
-  const earLeft = new Mesh(earGeometry, skinMaterial);
-  earLeft.position.set(-0.0108, 0, 0);
-  earLeft.scale.set(0.5, 1, 0.8);
-  const earRight = earLeft.clone();
-  earRight.position.x = 0.0108;
-  head.add(skull, hair, nose, brow, earLeft, earRight);
-
-  for (const part of [seat, leg, torso, neck]) {
-    part.castShadow = true;
-    part.receiveShadow = true;
-  }
-  head.traverse((child) => {
-    if (child instanceof Mesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-    }
-  });
-
-  subject.add(leg, seat, torso, neck, head);
+  const chair = createDirectorsChair();
+  chair.scale.setScalar(SCALE);
+  chair.position.z = 0.08 * SCALE;
+  const mark = createTeeMark();
+  mark.position.z = 0.06;
+  subject.add(chair, mark);
   subject.position.set(...SUBJECT_POSITION);
   return subject;
 }
@@ -166,6 +121,11 @@ function createCineCamera(): Group {
   glass.rotation.x = Math.PI / 2;
   glass.position.set(0, CAMERA_POSITION[1], -0.0205);
   rig.add(bodyMesh, lens, glass);
+  // A sandbag over the rear tripod leg, behind the camera, so it never sits in the shot.
+  const sandbag = createSandbag();
+  sandbag.scale.setScalar(SCALE);
+  sandbag.position.set(0, 0.02, 0.019);
+  rig.add(sandbag);
   rig.position.set(CAMERA_POSITION[0], 0, CAMERA_POSITION[2]);
   return rig;
 }
@@ -201,6 +161,7 @@ export function createSoundstage(): Group {
   }
 
   stage.add(createSubject(), createCineCamera());
+  stage.add(...createSetDressing());
   return stage;
 }
 
@@ -344,4 +305,43 @@ export function createFixture(kind: FixtureKind): Group {
   handle.name = 'fixture-handle';
   fixture.add(head, createYoke(kind === 'softbox' ? 0.01 : 0.0095), createStand(), handle);
   return fixture;
+}
+
+/**
+ * Studio clutter around the edges of the set, all outside the cine camera's
+ * frame and clear of the kit apron: a C-stand parked stage-left with a flag,
+ * apple boxes and a slate stage-right, and two cable runs taped to the floor.
+ */
+function createSetDressing(): Object3D[] {
+  const cStand = createCStand();
+  cStand.scale.setScalar(SCALE);
+  cStand.position.set(-0.205, 0, -0.12);
+  const standBag = createSandbag();
+  standBag.position.set(0.17, 0.05, 0.25);
+  standBag.rotation.y = 0.6;
+  cStand.add(standBag);
+
+  const appleBoxes = createAppleBoxes();
+  appleBoxes.scale.setScalar(SCALE);
+  appleBoxes.position.set(0.19, 0, -0.15);
+  appleBoxes.rotation.y = 0.3;
+  const slate = createSlate();
+  slate.scale.setScalar(SCALE);
+  slate.position.set(0.172, 0, -0.128);
+  slate.rotation.y = 0.3;
+
+  const cameraCable = createCable([
+    new Vector3(0.012, 0, 0.16),
+    new Vector3(0.07, 0, 0.175),
+    new Vector3(0.15, 0, 0.12),
+    new Vector3(0.21, 0, 0.0),
+    new Vector3(0.225, 0, -0.16),
+  ]);
+  const stinger = createCable([
+    new Vector3(-0.235, 0, -0.17),
+    new Vector3(-0.235, 0, -0.06),
+    new Vector3(-0.2, 0, 0.06),
+    new Vector3(-0.13, 0, 0.185),
+  ]);
+  return [cStand, appleBoxes, slate, ...cameraCable, ...stinger];
 }
