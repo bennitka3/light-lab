@@ -18,7 +18,7 @@ export class PanelSystem extends createSystem({}) {
     const xrButton = panel?.getElementById('xr-button');
     const exitButton = panel?.getElementById('exit-button');
     const headsetNote = panel?.getElementById('headset-note');
-    const desktopHelp = ['desktop-help', 'desktop-help-2'].map((id) => panel?.getElementById(id));
+    const desktopHelp = ['desktop-help', 'desktop-help-2', 'desktop-help-3'].map((id) => panel?.getElementById(id));
     if (xrButton == null || exitButton == null) {
       return;
     }
