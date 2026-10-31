@@ -56,7 +56,27 @@
           "targetElevationDeg": 35,
           "targetDistance": 0.16
         }
-      }
+      },
+      "children": [
+        {
+          "id": "actor",
+          "name": "Cast member (seated)",
+          "content": {
+            "type": "asset",
+            "asset": "actor-seated",
+            "castShadow": true,
+            "receiveShadow": true
+          },
+          "transform": {
+            "position": [
+              0,
+              0,
+              -0.06
+            ],
+            "scale": 0.0714286
+          }
+        }
+      ]
     },
     {
       "id": "fresnel",
