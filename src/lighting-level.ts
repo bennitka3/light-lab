@@ -2,10 +2,12 @@ import {
   BoxGeometry,
   CanvasTexture,
   Color,
+  DirectionalLight,
   createSystem,
   Entity,
   Grabbed,
   Group,
+  HemisphereLight,
   MathUtils,
   Mesh,
   MeshBasicMaterial,
@@ -14,6 +16,8 @@ import {
   PerspectiveCamera,
   Plane,
   PlaneGeometry,
+  Pressed,
+  RayInteractable,
   Raycaster,
   SpotLight,
   SRGBColorSpace,
@@ -33,16 +37,18 @@ import {
 } from './scene-assets/soundstage.scene-asset.js';
 
 /**
- * Runs one lighting level. The light kit sits behind the tape at the front of
- * the stage; a light switches on once it is moved past the tape onto the set,
- * and it always aims at the subject's head. A cine camera renders "your shot"
+ * Runs one lighting level. The house lights start on and flatten everything;
+ * the player kills them with the HOUSE switch. The light kit sits behind the
+ * tape at the front of the stage; tapping a light switches it on or off, and
+ * a switched-on light always aims at the subject's head. A cine camera renders "your shot"
  * to the monitor, the same set lit by the right light in the right spot is the
  * "target" shot, and a match score compares the two setups.
  *
  * In the headset a light is grabbed with a pinch (DistanceGrabbable). In a
- * desktop browser it is dragged with the mouse across the floor, and the
- * scroll wheel raises or lowers it while it is held. Dragging empty space
- * turns the view around the set, and scrolling zooms.
+ * desktop browser it is dragged with the mouse across the floor; Shift-drag or
+ * the scroll wheel raises or lowers it. A click without dragging (or a quick
+ * pinch in the headset) switches it on or off. Dragging empty space turns the
+ * view around the set, and scrolling zooms.
  */
 
 const MONITOR_W = 0.24;
@@ -59,8 +65,10 @@ const MIN_HEIGHT = 0.03;
 const MAX_HEIGHT = STAGE_HEIGHT - 0.02;
 // Keeps lights from being pushed through the actor.
 const SUBJECT_CLEARANCE = 0.03;
-// Lights on the stage side of the tape are on; behind it they are parked.
-const TAPE_Z = STAGE_DEPTH / 2;
+// A grab or click shorter than this, that barely moves the light, is a tap on its switch.
+const TAP_SECONDS = 0.3;
+const TAP_MAX_MOVE = 0.01;
+const TAP_MAX_PIXELS = 5;
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 
@@ -80,6 +88,7 @@ type Fixture = {
   kind: FixtureKind;
   head: Object3D;
   face?: MeshStandardMaterial;
+  led?: MeshStandardMaterial;
   pole: Object3D;
   base: Object3D;
   handle?: Object3D;
@@ -87,6 +96,9 @@ type Fixture = {
   /** Head position in stage-local meters. */
   local: Vector3;
   on: boolean;
+  /** Headset grab bookkeeping for telling a tap from a move. */
+  grabTime: number;
+  grabStart: Vector3;
 };
 
 function createSpot(kind: FixtureKind): SpotLight {
@@ -133,6 +145,13 @@ export class LightingLevelSystem extends createSystem({
   private holdTime = 0;
   private won = false;
   private backdrop = new Color('#141416');
+  private houseOn = true;
+  private houseLights: Object3D[] = [];
+  private houseSwitch!: Entity;
+  private houseLed!: MeshStandardMaterial;
+  private housePressed = false;
+  private pressingHouse = false;
+  private errorShown = false;
   private chime = new Audio(`${import.meta.env.BASE_URL}audio/chime.mp3`);
 
   // Desktop mouse: dragging a light, or orbiting the view around the set.
@@ -141,6 +160,8 @@ export class LightingLevelSystem extends createSystem({
   private orbiting = false;
   private dragPlane = new Plane();
   private dragOffset = new Vector3();
+  private downPointer = new Vector2();
+  private dragMoved = false;
   private lastPointer = new Vector2();
   private pointerNdc = new Vector2();
   private raycaster = new Raycaster();
@@ -152,6 +173,7 @@ export class LightingLevelSystem extends createSystem({
   private lensWorld = new Vector3();
   private v1 = new Vector3();
   private v2 = new Vector3();
+  private v3 = new Vector2();
 
   init(): void {
     this.cleanupFuncs.push(
@@ -166,10 +188,7 @@ export class LightingLevelSystem extends createSystem({
     const canvas = this.world.renderer.domElement;
     const onDown = (event: PointerEvent) => this.onPointerDown(event);
     const onMove = (event: PointerEvent) => this.onPointerMove(event);
-    const onUp = () => {
-      this.dragged = null;
-      this.orbiting = false;
-    };
+    const onUp = () => this.onPointerUp();
     const onWheel = (event: WheelEvent) => this.onWheel(event);
     const onContextMenu = (event: Event) => event.preventDefault();
     canvas.addEventListener('pointerdown', onDown);
@@ -188,6 +207,10 @@ export class LightingLevelSystem extends createSystem({
         fixture.spot.target.removeFromParent();
       }
       this.targetSpot?.removeFromParent();
+      for (const light of this.houseLights) {
+        light.removeFromParent();
+      }
+      this.houseSwitch?.dispose();
       this.monitor?.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
@@ -195,35 +218,96 @@ export class LightingLevelSystem extends createSystem({
   }
 
   update(delta: number): void {
-    if (!this.ready && !this.trySetup()) {
+    try {
+      if (!this.ready && !this.trySetup()) {
+        return;
+      }
+      // The view and the lights respond first, so a rendering problem further
+      // down never freezes the controls.
+      if (!this.immersive) {
+        this.applyOrbit();
+      }
+      this.framesSinceSetup++;
+      this.head.getWorldPosition(this.headWorld);
+      this.updateHouseSwitch();
+      for (const fixture of this.fixtures) {
+        this.updateGrab(fixture, delta);
+        this.updateFixture(fixture);
+      }
+      this.aimShotCamera();
+      // Capture the target once shadows settle, then refresh it now and then in
+      // case the set was moved (for example placed on a desk in the headset).
+      if (this.framesSinceSetup % 90 === 3) {
+        this.renderTargetShot();
+      }
+      this.renderShot(this.shotTarget, true);
+      this.updateScore(delta);
+    } catch (error) {
+      this.reportError(error);
+    }
+  }
+
+  /** Shows the first error on the monitor and in the console instead of failing silently. */
+  private reportError(error: unknown): void {
+    if (this.errorShown) {
       return;
     }
-    this.framesSinceSetup++;
-    this.head.getWorldPosition(this.headWorld);
+    this.errorShown = true;
+    console.error('[LightingLevel]', error);
+    if (this.label) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.drawLabel(0, 'MONITOR ERROR (send ben a screenshot)', message.slice(0, 70));
+    }
+  }
 
-    for (const fixture of this.fixtures) {
-      // In the browser the mouse drag moves lights, not the grab system.
-      if (this.immersive && fixture.entity.hasComponent(Grabbed)) {
-        fixture.object.getWorldPosition(this.v1);
-        fixture.local.copy(this.stage.worldToLocal(this.v1));
-      } else {
-        this.clampToSet(fixture.local);
-        this.placeFixture(fixture);
+  private updateGrab(fixture: Fixture, delta: number): void {
+    // In the browser the mouse moves lights, not the grab system.
+    const grabbed = this.immersive && fixture.entity.hasComponent(Grabbed);
+    if (grabbed) {
+      if (fixture.grabTime === 0) {
+        fixture.grabStart.copy(fixture.local);
       }
-      this.updateFixture(fixture);
+      fixture.grabTime += delta;
+      fixture.object.getWorldPosition(this.v1);
+      fixture.local.copy(this.stage.worldToLocal(this.v1));
+      return;
     }
+    if (fixture.grabTime > 0) {
+      // A quick pinch that barely moved the light is a tap on its switch.
+      if (fixture.grabTime < TAP_SECONDS && fixture.local.distanceTo(fixture.grabStart) < TAP_MAX_MOVE) {
+        fixture.local.copy(fixture.grabStart);
+        this.toggle(fixture);
+      }
+      fixture.grabTime = 0;
+    }
+    this.clampToSet(fixture.local);
+    this.placeFixture(fixture);
+  }
 
-    this.aimShotCamera();
-    if (!this.immersive) {
-      this.applyOrbit();
+  private toggle(fixture: Fixture): void {
+    fixture.on = !fixture.on;
+    this.won = false;
+    this.holdTime = 0;
+  }
+
+  private toggleHouse(): void {
+    this.houseOn = !this.houseOn;
+    this.won = false;
+    this.holdTime = 0;
+  }
+
+  private updateHouseSwitch(): void {
+    // In the headset the input system marks the switch Pressed (ray or poke);
+    // in the browser the mouse handler below flips it.
+    const pressed = this.immersive && this.houseSwitch.hasComponent(Pressed);
+    if (pressed && !this.housePressed) {
+      this.toggleHouse();
     }
-    // Capture the target once shadows settle, then refresh it now and then in
-    // case the set was moved (for example placed on a desk in the headset).
-    if (this.framesSinceSetup % 90 === 3) {
-      this.renderTargetShot();
+    this.housePressed = pressed;
+    for (const light of this.houseLights) {
+      light.visible = this.houseOn;
     }
-    this.renderShot(this.shotTarget, true);
-    this.updateScore(delta);
+    this.houseLed.emissive.set(this.houseOn ? '#4ade80' : '#3a1010');
   }
 
   private trySetup(): boolean {
@@ -271,12 +355,15 @@ export class LightingLevelSystem extends createSystem({
         kind,
         head: fixtureHead,
         face: face instanceof Mesh ? (face.material as MeshStandardMaterial) : undefined,
+        led: this.makeLed(object),
         pole,
         base,
         handle: object.getObjectByName('fixture-handle'),
         spot,
         local: new Vector3(entity.getValue(StageLight, 'kitX') ?? 0, KIT_HEIGHT, KIT_Z),
         on: false,
+        grabTime: 0,
+        grabStart: new Vector3(),
       });
     }
 
@@ -286,6 +373,8 @@ export class LightingLevelSystem extends createSystem({
     workLight.position.set(0, 0.24, KIT_Z + 0.03);
     workLight.target.position.set(0, 0, KIT_Z + 0.03);
     stage.add(workLight, workLight.target);
+
+    this.buildHouseLights();
 
     this.targetSpot = createSpot(this.targetKind);
     this.targetSpot.visible = false;
@@ -307,6 +396,14 @@ export class LightingLevelSystem extends createSystem({
           fixtures: this.fixtures,
           orbit: this.orbit,
           score: () => this.evaluate().score,
+          houseOn: () => this.houseOn,
+          setHouse: (on: boolean) => {
+            this.houseOn = on;
+          },
+          toggle: (kind: string) => {
+            const fixture = this.fixtures.find((f) => f.kind === kind);
+            if (fixture) this.toggle(fixture);
+          },
           hint: () => this.evaluate().hint,
         },
       });
@@ -315,6 +412,75 @@ export class LightingLevelSystem extends createSystem({
   }
 
   // --- Fixtures ------------------------------------------------------------
+
+  /** A small power switch with a status LED on the light's yoke: green when on. */
+  private makeLed(object: Object3D): MeshStandardMaterial {
+    const box = new Mesh(
+      new BoxGeometry(0.006, 0.004, 0.003),
+      new MeshStandardMaterial({ color: '#1b1b1e', roughness: 0.6 }),
+    );
+    box.name = 'fixture-switch';
+    box.position.set(0, -0.016, 0.004);
+    const led = new MeshStandardMaterial({ color: '#111', emissive: '#3a1010', emissiveIntensity: 2 });
+    const dot = new Mesh(new BoxGeometry(0.0018, 0.0018, 0.0008), led);
+    dot.position.set(0, 0, 0.0018);
+    box.add(dot);
+    object.add(box);
+    return led;
+  }
+
+  /**
+   * The studio's house lights: flat, even light from above that shows the
+   * whole set but flattens the face. They start on, are left out of the
+   * target shot, and the HOUSE switch beside the stage turns them off.
+   */
+  private buildHouseLights(): void {
+    const fill = new HemisphereLight('#f4f1ea', '#3a3631', 1.4);
+    fill.name = 'house-fill';
+    const top = new DirectionalLight('#fff8ee', 1.2);
+    top.name = 'house-top';
+    this.stage.getWorldPosition(this.v1);
+    top.position.set(this.v1.x, this.v1.y + 1, this.v1.z + 0.2);
+    top.target.position.copy(this.v1);
+    this.world.scene.add(fill, top, top.target);
+    this.houseLights = [fill, top];
+
+    // The switch: a wall plate with a status LED and a label, at the front-left corner of the stage.
+    const plate = new Group();
+    plate.name = 'house-switch';
+    const body = new Mesh(
+      new BoxGeometry(0.05, 0.034, 0.008),
+      new MeshStandardMaterial({ color: '#2a2a2e', roughness: 0.5, metalness: 0.3 }),
+    );
+    this.houseLed = new MeshStandardMaterial({ color: '#111', emissive: '#4ade80', emissiveIntensity: 2 });
+    const led = new Mesh(new BoxGeometry(0.006, 0.006, 0.002), this.houseLed);
+    led.position.set(-0.016, 0, 0.0045);
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#f5d90a';
+      ctx.font = 'bold 64px system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('HOUSE', 20, 64);
+    }
+    const labelTexture = new CanvasTexture(canvas);
+    labelTexture.colorSpace = SRGBColorSpace;
+    const label = new Mesh(
+      new PlaneGeometry(0.032, 0.016),
+      new MeshBasicMaterial({ map: labelTexture, transparent: true, toneMapped: false }),
+    );
+    label.position.set(0.006, 0, 0.0045);
+    plate.add(body, led, label);
+    // Placed by the stage (which is never rotated), as its own scene-level entity
+    // so the input system marks it Pressed for a mouse click, a ray or a poke.
+    plate.position.set(-STAGE_WIDTH / 2 - 0.05, 0.06, STAGE_DEPTH / 2 + 0.06);
+    this.stage.localToWorld(plate.position);
+    plate.rotation.set(-0.5, 0.4, 0);
+    this.houseSwitch = this.world.createTransformEntity(plate);
+    this.houseSwitch.addComponent(RayInteractable);
+  }
 
   private clampToSet(local: Vector3): void {
     local.x = MathUtils.clamp(local.x, -BOUNDS_X, BOUNDS_X);
@@ -343,8 +509,6 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private updateFixture(fixture: Fixture): void {
-    fixture.on = fixture.local.z < TAPE_Z;
-
     // Stretch the stand from the yoke down to the floor.
     const height = Math.max(fixture.local.y, 0.014);
     const poleLength = Math.max(height - 0.012, 0.001);
@@ -361,6 +525,7 @@ export class LightingLevelSystem extends createSystem({
     if (fixture.face) {
       fixture.face.emissiveIntensity = fixture.on ? 1.6 : 0;
     }
+    fixture.led?.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
   }
 
   private headLocal(out: Vector3): Vector3 {
@@ -419,9 +584,17 @@ export class LightingLevelSystem extends createSystem({
         fixture.handle.visible = false;
       }
     }
-    renderer.setRenderTarget(into);
-    renderer.render(this.world.scene, this.shotCamera);
-    renderer.setRenderTarget(previousTarget);
+    try {
+      renderer.setRenderTarget(into);
+      renderer.render(this.world.scene, this.shotCamera);
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      this.restoreAfterShot(xrEnabled);
+    }
+  }
+
+  private restoreAfterShot(xrEnabled: boolean): void {
+    const renderer = this.world.renderer;
     for (const fixture of this.fixtures) {
       fixture.object.visible = true;
       if (fixture.handle) {
@@ -438,6 +611,9 @@ export class LightingLevelSystem extends createSystem({
     for (const fixture of this.fixtures) {
       fixture.spot.visible = false;
     }
+    for (const light of this.houseLights) {
+      light.visible = false;
+    }
     this.poseToWorld(this.target, this.v1);
     this.targetSpot.position.copy(this.v1);
     this.targetSpot.target.position.copy(this.headWorld);
@@ -447,6 +623,9 @@ export class LightingLevelSystem extends createSystem({
     this.targetSpot.visible = false;
     for (const fixture of this.fixtures) {
       fixture.spot.visible = fixture.on;
+    }
+    for (const light of this.houseLights) {
+      light.visible = this.houseOn;
     }
   }
 
@@ -464,8 +643,14 @@ export class LightingLevelSystem extends createSystem({
     const on = this.fixtures.filter((fixture) => fixture.on);
     const right = on.find((fixture) => fixture.kind === this.targetKind);
     const extras = on.filter((fixture) => fixture.kind !== this.targetKind);
+    if (this.houseOn) {
+      return {
+        score: on.length === 0 ? 0 : Math.min(45, Math.round(this.poseFit(this.poseOf(on[0].local)) * 45)),
+        hint: 'The house lights flatten everything. Hit the HOUSE switch.',
+      };
+    }
     if (on.length === 0) {
-      return { score: 0, hint: 'Pick a light from the kit and move it past the tape.' };
+      return { score: 0, hint: 'Click a light in the kit to switch it on.' };
     }
     if (!right) {
       const fit = this.poseFit(this.poseOf(extras[0].local));
@@ -479,7 +664,7 @@ export class LightingLevelSystem extends createSystem({
     if (extras.length > 0) {
       return {
         score: Math.round(fit * 55),
-        hint: 'Too many lights. Put the extra one back behind the tape.',
+        hint: 'Too many lights. Click the extra one to switch it off.',
       };
     }
     return { score: Math.round(fit * 100), hint: this.poseHint(pose) };
@@ -640,7 +825,14 @@ export class LightingLevelSystem extends createSystem({
       return;
     }
     this.lastPointer.set(event.clientX, event.clientY);
+    this.downPointer.set(event.clientX, event.clientY);
+    this.dragMoved = false;
     this.setPointerRay(event);
+    // A click on the HOUSE switch flips it on release, and doesn't turn the view.
+    if (this.raycaster.intersectObject(this.houseSwitch.object3D!, true).length > 0) {
+      this.pressingHouse = true;
+      return;
+    }
     if (event.button === 0) {
       let best: { fixture: Fixture; distance: number } | null = null;
       for (const fixture of this.fixtures) {
@@ -667,7 +859,15 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private onPointerMove(event: PointerEvent): void {
-    if (this.dragged) {
+    if (this.downPointer.distanceTo(this.v3.set(event.clientX, event.clientY)) > TAP_MAX_PIXELS) {
+      this.dragMoved = true;
+    }
+    if (this.dragged && event.shiftKey) {
+      // Shift-drag raises and lowers the held light.
+      const dy = event.clientY - this.lastPointer.y;
+      this.dragged.local.y = MathUtils.clamp(this.dragged.local.y - dy * 0.0008, MIN_HEIGHT, MAX_HEIGHT);
+      this.resetDragPlane(this.dragged);
+    } else if (this.dragged) {
       this.setPointerRay(event);
       if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v1)) {
         this.v1.add(this.dragOffset);
@@ -684,6 +884,36 @@ export class LightingLevelSystem extends createSystem({
     this.lastPointer.set(event.clientX, event.clientY);
   }
 
+  /** Re-anchors the horizontal drag plane at the held light's current height. */
+  private resetDragPlane(fixture: Fixture): void {
+    this.v1.copy(fixture.local);
+    this.stage.localToWorld(this.v1);
+    this.dragPlane.setFromNormalAndCoplanarPoint(this.v2.set(0, 1, 0), this.v1);
+    this.setPointerRayFrom(this.lastPointer);
+    if (this.raycaster.ray.intersectPlane(this.dragPlane, this.v2)) {
+      this.dragOffset.copy(this.v1).sub(this.v2);
+    }
+  }
+
+  private setPointerRayFrom(point: Vector2): void {
+    const rect = this.world.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.set(((point.x - rect.left) / rect.width) * 2 - 1, -((point.y - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(this.pointerNdc, this.world.camera);
+  }
+
+  private onPointerUp(): void {
+    // A click on a light that didn't drag it flips its switch.
+    if (this.dragged && !this.dragMoved) {
+      this.toggle(this.dragged);
+    }
+    if (this.pressingHouse && !this.dragMoved) {
+      this.toggleHouse();
+    }
+    this.pressingHouse = false;
+    this.dragged = null;
+    this.orbiting = false;
+  }
+
   private onWheel(event: WheelEvent): void {
     if (!this.ready || this.immersive) {
       return;
@@ -696,9 +926,7 @@ export class LightingLevelSystem extends createSystem({
         MIN_HEIGHT,
         MAX_HEIGHT,
       );
-      this.v1.copy(this.dragged.local);
-      this.stage.localToWorld(this.v1);
-      this.dragPlane.setFromNormalAndCoplanarPoint(this.v2.set(0, 1, 0), this.v1);
+      this.resetDragPlane(this.dragged);
       return;
     }
     this.orbit.radius = MathUtils.clamp(this.orbit.radius * Math.exp(event.deltaY * 0.001), 0.2, 1.6);

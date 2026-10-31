@@ -73,10 +73,10 @@
   <div class="panel-content">
     <div class="eyebrow">LUCKY BREAK - SCENE 1</div>
     <div class="heading">"You! Lighting! Make the talent look good."</div>
-    <div class="body">Pick a light from the kit, move it past the</div>
-    <div class="body">tape, and match the target on the monitor.</div>
-    <div id="desktop-help" class="body">Drag a light to move it.</div>
-    <div id="desktop-help-2" class="body">Scroll while dragging to raise it.</div>
+    <div class="body">Kill the house lights, switch on the right</div>
+    <div class="body">light, and match the target on the monitor.</div>
+    <div id="desktop-help" class="body">Click a light: on/off. Drag it: move it.</div>
+    <div id="desktop-help-2" class="body">Shift-drag (or scroll) to raise it.</div>
     <div id="desktop-help-3" class="body">Drag empty space to turn the set.</div>
     <div id="headset-note" class="note">On a Quest? Open this page there.</div>
   </div>
