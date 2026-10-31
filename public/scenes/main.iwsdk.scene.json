@@ -1,0 +1,177 @@
+{
+  "version": "iwsdk.scene.v1",
+  "units": "meters",
+  "components": {
+    "com.iwsdk.components.IBLGradient": {
+      "sky": [
+        0.5,
+        0.5,
+        0.55,
+        1
+      ],
+      "equator": [
+        0.35,
+        0.34,
+        0.33,
+        1
+      ],
+      "ground": [
+        0.2,
+        0.19,
+        0.18,
+        1
+      ],
+      "intensity": 0.1
+    }
+  },
+  "environment": {
+    "toneMapping": "aces",
+    "exposure": 1,
+    "shadows": true,
+    "shadowMapType": "pcf"
+  },
+  "resources": {},
+  "nodes": [
+    {
+      "id": "soundstage",
+      "name": "Soundstage (Scene 1: social clip)",
+      "content": {
+        "type": "asset",
+        "asset": "soundstage",
+        "castShadow": true,
+        "receiveShadow": true
+      },
+      "transform": {
+        "position": [
+          0,
+          0.74,
+          -0.55
+        ]
+      },
+      "components": {
+        "LightingStage": {
+          "levelId": "scene-1-social-clip"
+        }
+      }
+    },
+    {
+      "id": "softbox",
+      "name": "Softbox (key light)",
+      "content": {
+        "type": "asset",
+        "asset": "softbox"
+      },
+      "transform": {
+        "position": [
+          0,
+          0.845,
+          -0.41
+        ]
+      },
+      "components": {
+        "RayInteractable": {},
+        "DistanceGrabbable": {
+          "movementMode": "MoveFromTarget",
+          "rotate": false,
+          "scale": false,
+          "translate": true,
+          "returnToOrigin": false
+        },
+        "OneHandGrabbable": {
+          "rotate": false,
+          "translate": true
+        },
+        "KeyLightRig": {
+          "intensity": 0.25,
+          "targetAzimuthDeg": -45,
+          "targetElevationDeg": 35,
+          "targetDistance": 0.16,
+          "startAzimuthDeg": 70,
+          "startElevationDeg": 5,
+          "startDistance": 0.22
+        }
+      }
+    },
+    {
+      "id": "welcome-panel",
+      "name": "Level Card",
+      "content": {
+        "type": "asset",
+        "asset": "welcome-panel"
+      },
+      "transform": {
+        "position": [
+          -0.38,
+          1.06,
+          -0.47
+        ],
+        "rotationDeg": [
+          -8,
+          30,
+          0
+        ],
+        "scale": 0.06
+      },
+      "components": {
+        "RayInteractable": {}
+      }
+    },
+    {
+      "id": "room-fill",
+      "name": "Room Fill",
+      "components": {
+        "HemisphereLight": {
+          "skyColor": [
+            0.75,
+            0.78,
+            0.85,
+            1
+          ],
+          "groundColor": [
+            0.3,
+            0.28,
+            0.26,
+            1
+          ],
+          "intensity": 0.06
+        }
+      }
+    }
+  ],
+  "authoring": {
+    "views": [
+      {
+        "id": "hero",
+        "role": "hero",
+        "projection": "perspective",
+        "position": [
+          0.05,
+          1.12,
+          0.02
+        ],
+        "target": [
+          0.02,
+          0.83,
+          -0.55
+        ],
+        "fov": 50
+      },
+      {
+        "id": "top",
+        "role": "diagnostic",
+        "projection": "orthographic",
+        "position": [
+          0,
+          3,
+          -0.55
+        ],
+        "target": [
+          0,
+          0,
+          -0.55
+        ],
+        "height": 1.4
+      }
+    ]
+  }
+}
