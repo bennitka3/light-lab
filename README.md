@@ -6,15 +6,17 @@ and you light it to match the director's target shot.
 
 ## Scene 1: social clip (soft key)
 
-A tabletop soundstage with one cast member and a cine camera. Three lights wait
-in the kit behind the tape: a softbox, a Fresnel and a PAR can. A light switches
-on once it is moved past the tape. Pick the right one, place it until "your
-shot" on the camera monitor matches the target, and hold a match of 90% or more
-for the director to sign off.
+A tabletop soundstage with one cast member and a cine camera. The house lights
+start on and flatten everything; kill them with the HOUSE switch. Three lights
+wait in the kit behind the tape: a softbox, a Fresnel and a PAR can. Switch on
+the right one, place it until "your shot" on the camera monitor matches the
+target, and hold a match of 90% or more for the director to sign off.
 
-- Headset: pinch or grab a light (hands or controllers).
-- Desktop browser: drag a light across the set; scroll while dragging to raise
-  or lower it. Drag empty space to turn the view, scroll to zoom.
+- Headset: pinch and move a light; a quick pinch switches it on or off. Point
+  at or poke the HOUSE switch.
+- Desktop browser: click a light to switch it on or off, drag it to move it,
+  Shift-drag (or scroll while dragging) to raise it. Click HOUSE for the house
+  lights. Drag empty space to turn the view, scroll to zoom.
 
 ## Develop
 
