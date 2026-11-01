@@ -3,6 +3,24 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 4: 2026-11-01 (ben, desktop browser)
+
+Decision from ben: **every light switch lives on the iPad.** "all the light buttons should be labeled on your monitor, then we don't need labels over the lights because you can switch it on to find out." No labels float over lights any more.
+
+| ben said | Status |
+|---|---|
+| "the house lights button should be on your monitor. actually all the light buttons should be labeled on your monitor" | **Done 2026-11-01.** The iPad has a row of labeled switches: HOUSE, each light in the kit, and Lamp in the living room. Each has a green light when it's on. The wall switch and the SCREEN/WARM tags over lights are gone. Clicking a light on set still switches it too. |
+| "hover labels on the lights should show up each level the first time you see a new light" | **Replaced** by the labeled switches (ben's follow-up). Pointing at or dragging a light outlines its switch on the iPad, so you can see which one it is. |
+| "the warm light in the later lesson should have a temperature dial on your monitor too instead of saying warm" | **Done 2026-11-01.** In scenes 4 and 6 the light that used to be "WARM" is a bi-color light. Its switch has a color temperature dial: ◀ warmer, ▶ cooler, in stops of 3200K, 4000K, 4800K and 5600K. The warm role needs 3200K. Leave it at daylight and the hint says "Right light, wrong color: dial the softbox down to 3200K." |
+| "keep in mind... switching on a light changes at least one of dee's hints" | **Done.** Every hint, tip and how-to-play line now says to use the iPad buttons. |
+| "the quick tips below the monitors are hidden when you're dragging a light" | **Fixed.** The tip line always shows the hint. It no longer swaps to the light's name. |
+| "dee's messages need to be larger and easier to read and need to have notifications that the user clicks to keep the phone on screen, or they can click it again to minimize it" | **Done.** Text is about 40% bigger. A new text pops the phone up for a few seconds. Tap it to keep it up and tap again to tuck it ("tap to keep open" / "tap to tuck away" under Dee's name). |
+| "the monitor should be adjustable in size... let user choose size" | **Done.** − and + buttons in the iPad's top-right corner (or the - and = keys) make it smaller or bigger. The size is remembered on that device. In the headset the same buttons scale it. |
+
+### Roadmap idea (not for the competition)
+
+- **Camera settings mode** (ben, 2026-11-01): "camera settings is the next type of game or even mode in this game. you already have a scene and have to adjust camera settings to take a shot in different environments. like rollers with a car, bird photos, etc. you have to set manual settings like f stop iso and shutter speed, as well as pick lenses." Same loop as Light Lab (match a target shot), with the camera as the puzzle instead of the lights.
+
 ## Round 3: 2026-11-01 (ben, desktop browser)
 
 Rule from ben: **"everything is practical UI."** Nothing floats on its own. Anything on screen is a prop you hold (iPad, phone) or comes from a character on set.

@@ -2,6 +2,25 @@
 
 Notes for whoever (human or Claude) works on this next. Newest first.
 
+## 2026-11-01: playtest round 4, switches on the iPad
+
+**All switches are buttons on the iPad, labeled.** HOUSE, every light and
+the lamp. The game state stays on the fixtures; `updateLightButtons()` copies
+it onto a fixed array each frame, and the iPad only redraws when something
+changed (no per-frame allocation).
+
+**Presses on the iPad need the hit point.** On desktop the mouse ray gives
+it. In the headset the iPad listens for the pointer event IWSDK raises
+(`pointerdown`, which bubbles up to the iPad group and carries `point`). Not
+yet checked in the headset emulator or on a Quest.
+
+**Bi-color instead of gels.** `KitItem.dial` makes a light dialable and
+`Role.warm` needs it at 3200K. `applyKelvin()` blends from the light's own
+color to the old orange-gel tint, so the target shot looks the same as before.
+
+**The iPad now catches every press in play,** so a drag that starts on it no
+longer turns the view. Tests that orbit must start on empty space.
+
 ## 2026-11-01: playtest rounds 2 and 3, "everything is practical UI"
 
 **Design rule from ben: nothing floats.** Every piece of UI is a prop the

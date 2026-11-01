@@ -3,7 +3,7 @@
 // 2. A light visible in the shot fails the take (scenes 3 and 5).
 // 3. Scene 7 credits a SCREEN panel to the side it is actually on.
 // 4. Scene 2 starts set up with one bumped light, and fixing it wins.
-// 5. Real mouse: the lower-third button, hover labels, Dee's texts.
+// 5. Real mouse: the iPad's Go button, light switches, size buttons, the dial, Dee's phone.
 // Usage: node scripts/playtest-fixes.cjs [url] [outDir]
 const { chromium } = require('playwright');
 
@@ -41,15 +41,42 @@ const { chromium } = require('playwright');
   check('Dee texts the intro and a tip', texts.length >= 3 && texts[0].startsWith('dee:'), texts);
   await page.screenshot({ path: `${out}/02-scene1-phone.png` });
 
-  // 5b. Hover label on a kit light.
+  // Round 4. Light switches on the iPad: HOUSE and each light, labeled; hover outlines the switch.
+  const buttons = await api(() => window.lightLab.lightButtons());
+  check('iPad has a labeled switch for HOUSE and every light', buttons.map((b) => b.label).join(',') === 'HOUSE,Fresnel,Softbox,PAR can', buttons);
+  await page.mouse.click((await at('light:0')).x, (await at('light:0')).y);
+  await wait(300);
+  check('HOUSE on the iPad turns the house lights off', !(await api(() => window.lightLab.houseOn())));
+  const sb = await at('light:2');
+  await page.mouse.click(sb.x, sb.y);
+  await wait(300);
+  check('a light switch on the iPad turns that light on', await api(() => window.lightLab.fixtures()[1].on));
+  // Drag the softbox: the tip line keeps showing the hint (not the light's name).
   const p = await at(1);
-  await page.mouse.move(p.x - 30, p.y - 30);
   await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.mouse.move(p.x - 40, p.y - 10, { steps: 4 });
   await wait(400);
-  const hovered = await api(() => window.lightLab.hovered());
-  const hoverText = await api(() => window.lightLab.hoverText());
-  check('hovering a light shows its name on the iPad', hovered === 'softbox' && /^Softbox/.test(hoverText || ''), { hovered, hoverText });
-  await page.screenshot({ path: `${out}/03-hover.png` });
+  const dragHint = (await state()).hint;
+  const card = await api(() => window.lightLab.card());
+  const hoveredWhileDrag = await api(() => window.lightLab.hovered());
+  await page.screenshot({ path: `${out}/03-drag-tip.png` });
+  await page.mouse.up();
+  check('dragging a light keeps the tip visible and outlines its switch', hoveredWhileDrag === 'softbox' && card.body === '' && dragHint.length > 0, { dragHint, hoveredWhileDrag });
+  // iPad size buttons.
+  const z0 = await api(() => window.lightLab.zoom());
+  const plus = await at('size:1');
+  await page.mouse.click(plus.x, plus.y);
+  await wait(800);
+  const z1 = await api(() => window.lightLab.zoom());
+  const s1 = await api(() => window.lightLab.ipadScale());
+  await page.screenshot({ path: `${out}/03b-ipad-bigger.png` });
+  const minus = await at('size:-1');
+  await page.mouse.click(minus.x, minus.y);
+  await wait(800);
+  const z2 = await api(() => window.lightLab.zoom());
+  const sSmall = await api(() => window.lightLab.ipadScale());
+  check('iPad - and + change its size', z1 > z0 && z2 === z0 && s1 > sSmall, { z0, z1, z2, s1, sSmall });
   await page.mouse.move(5, 5);
 
   // 1. Every scene's solution is out of frame and wins.
@@ -146,17 +173,51 @@ const { chromium } = require('playwright');
   const winsNoRealGuy = await api(() => true);
   check('Dee win lines never say "real guy"', winsNoRealGuy && !t2.some((t) => /real guy/.test(t)));
 
-  // 8. The phone tucks down when nothing is happening, and comes back on hover.
+  // 8. The phone tucks down when nothing is happening; a tap keeps it up, another tucks it.
   await wait(9000);
   const tucked = !(await api(() => window.lightLab.phoneAwake()));
-  const ph = await at('phone');
-  await page.mouse.move(ph.x, 712);
+  let ph = await at('phone');
+  await page.mouse.click(ph.x, 712);
+  await wait(1500);
+  const pinned = await api(() => window.lightLab.phonePinned());
+  await wait(8000);
+  const stillUp = await api(() => window.lightLab.phoneAwake());
+  await page.screenshot({ path: `${out}/10-phone-pinned.png` });
+  ph = await at('phone');
+  await page.mouse.click(ph.x, ph.y);
   await wait(300);
-  const awakeOnHover = await api(() => window.lightLab.phoneAwake());
-  check('phone tucks away when idle and wakes on hover', tucked && awakeOnHover, { tucked, awakeOnHover });
-  await wait(800);
-  await page.screenshot({ path: `${out}/10-phone-hover.png` });
+  const unpinned = !(await api(() => window.lightLab.phonePinned()));
+  check('phone tucks when idle; a tap keeps it up, another tucks it', tucked && pinned && stillUp && unpinned, { tucked, pinned, stillUp, unpinned });
   await page.mouse.move(5, 5);
+
+  // Round 4. The bi-color light: its dial on the iPad must go warm for the warm role.
+  await api(() => window.lightLab.loadLevel(3));
+  await wait(400);
+  const b4 = await api(() => window.lightLab.lightButtons());
+  check('scene 4 iPad shows a dial on the bi-color softbox, and a Lamp switch', b4.some((b) => b.kelvin === 5600) && b4[b4.length - 1].label === 'Lamp', b4);
+  const dialIdx = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.dial));
+  await api(() => window.lightLab.solve());
+  await wait(300);
+  // Turn it back to daylight with the dial: the shot no longer wins and the hint says so.
+  for (let k = 0; k < 3; k++) {
+    const c = await at(`cooler:${dialIdx + 1}`);
+    await page.mouse.click(c.x, c.y);
+    await wait(250);
+  }
+  await wait(600);
+  const cold = await state();
+  const kCold = await api((i) => window.lightLab.kelvin(i), dialIdx);
+  await page.screenshot({ path: `${out}/11-scene4-dial-cold.png` });
+  check('daylight on the warm key does not win, and the hint names the dial', kCold === 5600 && cold.phase === 'playing' && /dial/i.test(cold.hint), { kCold, cold });
+  for (let k = 0; k < 3; k++) {
+    const w = await at(`warmer:${dialIdx + 1}`);
+    await page.mouse.click(w.x, w.y);
+    await wait(250);
+  }
+  await wait(2500);
+  const warm = await state();
+  await page.screenshot({ path: `${out}/12-scene4-dial-warm.png` });
+  check('dialing back to 3200K wins scene 4', (await api((i) => window.lightLab.kelvin(i), dialIdx)) === 3200 && warm.phase === 'won', warm);
 
   console.log('errors', errors.length ? errors : 'none');
   const failed = Object.entries(results).filter(([, ok]) => !ok);
