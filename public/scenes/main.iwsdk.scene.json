@@ -171,30 +171,6 @@
       ]
     },
     {
-      "id": "welcome-panel",
-      "name": "How To Play",
-      "content": {
-        "type": "asset",
-        "asset": "welcome-panel"
-      },
-      "transform": {
-        "position": [
-          -0.46,
-          0.88,
-          -0.36
-        ],
-        "rotationDeg": [
-          -12,
-          45,
-          0
-        ],
-        "scale": 0.042
-      },
-      "components": {
-        "RayInteractable": {}
-      }
-    },
-    {
       "id": "room-fill",
       "name": "Room Fill",
       "components": {

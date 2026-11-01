@@ -66,7 +66,7 @@ export type LevelDef = {
   quote: string;
   objective: string;
   lesson: string;
-  /** Story beat shown after the win, before the next scene. */
+  /** Dee's gossip text after the win (the story beat between scenes). */
   after: string;
   /** Lights already set up when the scene starts (the player fixes what is wrong). */
   preset?: Preset[];
@@ -104,7 +104,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"You! Lighting! Make the talent look good."',
     objective: 'Kill the house lights. Then one soft key: 45° to the side, a bit above the eyes.',
     lesson: 'Soft key, 45° to the side, a little above the eyes. Flattering on anyone.',
-    after: "The director squints at you. \"Stick around.\"",
+    after: 'the director just squinted at you and said "stick around" 👀',
     tip: 'Big square softbox = your key. Hit HOUSE first, then put it front-left of him, a little above his eyes.',
   },
   {
@@ -149,7 +149,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"On location at the professor\'s house. The real gaffer lit this before he quit, then somebody kicked a light."',
     objective: 'Key, fill and back light are already up. One of them got bumped. Find it and put it back.',
     lesson: 'Three-point lighting: the key shapes the face, the fill softens its shadows, the back light separates him from the background.',
-    after: 'The professor asks if you do weddings.',
+    after: 'the professor is asking if you do weddings 😂',
     tip: 'Key = softbox (shapes the face). Fill = LED panel (softens). Back = Fresnel (outlines him). One of them is on the wrong side 👀',
   },
   {
@@ -181,7 +181,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"The sponsor\'s perfume. Make that bottle look expensive."',
     objective: 'Glass loves a big soft light from above and a thin rim of light on its edge.',
     lesson: 'Products: a soft top light gives shape, a strip light behind draws a crisp edge on the glass.',
-    after: 'The sponsor sends a fruit basket addressed to "Lighting Genius (name unknown)".',
+    after: 'the sponsor just sent a fruit basket to "Lighting Genius (name unknown)" lmao',
     tip: 'Glass is all reflections. Big softbox high above it, skinny strip box behind it off to one side. Keep every stand OUT of the shot.',
   },
   {
@@ -207,7 +207,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"Cozy evening scene. The lamp is in the shot, so the light has to make sense."',
     objective: 'Switch on the lamp in the shot. Then light him from the lamp\'s side, in the lamp\'s warm color.',
     lesson: 'Motivated light: the key comes from where a real lamp in the scene would light him, in its color.',
-    after: 'The real gaffer is back from lunch. He watches you. He says nothing. He looks scared.',
+    after: "uh oh. the real gaffer is back from lunch. he's just watching you. he looks scared",
     tip: 'Click the lamp on first. Then the WARM softbox (orange gel) from the lamp\'s side, camera-right.',
   },
   {
@@ -231,7 +231,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"Detective drama. I want him sweating under one hard light."',
     objective: 'One hard light, high and nearly straight overhead. Nothing else.',
     lesson: 'Low-key lighting: one hard top light, deep shadows. The dark does the storytelling.',
-    after: 'Craft services gives you the good sandwich now.',
+    after: "craft services is giving you the good sandwich now. you've made it 🥪",
     tip: 'One hard light (Fresnel or PAR) almost straight over his head. Raise it high and it hangs from the grid, out of the shot.',
   },
   {
@@ -263,7 +263,7 @@ export const LEVELS: LevelDef[] = [
     quote: '"Golden hour on a soundstage. Fake me a sunset."',
     objective: 'A low, warm, hard sun from behind him, and a soft fill on his face.',
     lesson: 'Magic hour: a low warm backlight plus a gentle fill. Gels change the color of a light.',
-    after: 'Your phone buzzes. It\'s Mom.',
+    after: '',
     tip: 'Sun = the WARM Fresnel, low and behind him on camera-left. LED panel soft on his face from camera-right.',
     texts: [{ from: 'mom', text: 'Are you famous yet? 🎬❤️' }],
   },
