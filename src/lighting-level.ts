@@ -9,6 +9,7 @@ import {
   Grabbed,
   Group,
   HemisphereLight,
+  Hovered,
   MathUtils,
   Mesh,
   MeshBasicMaterial,
@@ -32,7 +33,8 @@ import {
 } from '@iwsdk/core';
 import { CreatureFeature } from './creature-feature.js';
 import { LightingStage, StageLight } from './lighting-components.js';
-import { type KitItem, type LevelDef, LEVELS, type Role } from './levels.js';
+import { DEE_WINS, DIRECTOR_WINS, type KitItem, type LevelDef, LEVELS, type Role } from './levels.js';
+import { PHONE_HEIGHT, PHONE_WIDTH, PhoneHud } from './phone-hud.js';
 import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-sets.js';
 import {
   createFixture,
@@ -44,7 +46,7 @@ import {
   STAGE_HEIGHT,
   STAGE_WIDTH,
 } from './scene-assets/soundstage.scene-asset.js';
-import { CARD_HEIGHT, CARD_WIDTH, type CardContent, StoryCard, wrap } from './story-card.js';
+import { CARD_BUTTON_CENTER, CARD_HEIGHT, CARD_WIDTH, type CardContent, StoryCard, wrap } from './story-card.js';
 
 /**
  * Runs Lucky Break: seven lighting scenes on one tabletop soundstage, and the
@@ -89,6 +91,17 @@ const SCREEN_CENTER = new Vector3(0, STAGE_HEIGHT / 2, -STAGE_DEPTH / 2);
 const HEAD_HEIGHT = 0.105;
 // Within this distance of a fixed-position role target counts as a perfect spot.
 const POSITION_TOLERANCE = 0.045;
+// A light raised this high hangs from the grid instead of standing on the floor
+// (its pipe runs up, out of the shot, like a real studio's overhead lights).
+const HANG_HEIGHT = 0.17;
+// How long a light must sit in the shot before Dee texts about it, and how long
+// a hint must stay the same before Dee texts it as a nudge.
+const IN_FRAME_TEXT_SECONDS = 1.2;
+const NUDGE_SECONDS = 14;
+// Where the lower third and the phone ride in front of the headset view (meters, head space).
+const HUD_CARD_OFFSET = new Vector3(0, -0.2, -0.7);
+const HUD_PHONE_OFFSET = new Vector3(0.3, -0.17, -0.62);
+const HUD_DESKTOP_DISTANCE = 0.6;
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
@@ -114,6 +127,15 @@ const KIND_NAMES: Record<FixtureKind, string> = {
   par: 'PAR can',
 };
 
+/** What the hover label says about each kind of light. */
+const KIND_INFO: Record<FixtureKind, { name: string; what: string }> = {
+  softbox: { name: 'Softbox', what: 'Big and soft. The classic key light.' },
+  panel: { name: 'LED panel', what: 'Soft and gentle. Good for fill.' },
+  strip: { name: 'Strip box', what: 'Tall, thin and soft. Draws edges.' },
+  fresnel: { name: 'Fresnel', what: 'Hard light with crisp shadows.' },
+  par: { name: 'PAR can', what: 'Hard, narrow and punchy.' },
+};
+
 type Fixture = {
   entity: Entity;
   object: Object3D;
@@ -124,6 +146,7 @@ type Fixture = {
   handle?: Object3D;
   pole: Object3D;
   base: Object3D;
+  yoke?: Object3D;
   spot: SpotLight;
   /** Head position in stage-local meters. */
   local: Vector3;
@@ -229,10 +252,23 @@ export class LightingLevelSystem extends createSystem({
   private creature = new CreatureFeature();
   private creatureHold = 0;
 
-  // The call sheet.
+  // The lower third, the phone, and the hover label.
   private card = new StoryCard();
   private cardEntity!: Entity;
   private cardPressed = false;
+  private phone = new PhoneHud();
+  private hudPlaced = false;
+  private hoverTag!: { mesh: Mesh; canvas: HTMLCanvasElement; texture: CanvasTexture; shown?: Fixture };
+  private mouseHover: Fixture | null = null;
+  private lastDirectorLine = -1;
+
+  // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
+  private inFrameTime = 0;
+  private inFrameTexted = false;
+  private hintSince = 0;
+  private lastHint = '';
+  private lastNudge = '';
+  private sinceNudge = 0;
 
   private errorShown = false;
   private backdrop = new Color('#141416');
@@ -257,7 +293,10 @@ export class LightingLevelSystem extends createSystem({
   private v1 = new Vector3();
   private v2 = new Vector3();
   private v3 = new Vector2();
+  private v4 = new Vector3();
   private lensWorld = new Vector3();
+  private headWorld = new Vector3();
+  private hudTarget = new Vector3();
 
   init(): void {
     this.cleanupFuncs.push(
@@ -275,6 +314,13 @@ export class LightingLevelSystem extends createSystem({
     const onUp = () => this.onPointerUp();
     const onWheel = (event: WheelEvent) => this.onWheel(event);
     const onContextMenu = (event: Event) => event.preventDefault();
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.key === 'Enter' || event.key === ' ') && this.ready && this.card.hasButton) {
+        event.preventDefault();
+        this.pressCard();
+      }
+    };
+    window.addEventListener('keydown', onKey);
     canvas.addEventListener('pointerdown', onDown);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -286,6 +332,7 @@ export class LightingLevelSystem extends createSystem({
       window.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('contextmenu', onContextMenu);
+      window.removeEventListener('keydown', onKey);
       this.unloadLevel();
       for (const light of this.houseLights) {
         light.removeFromParent();
@@ -294,6 +341,8 @@ export class LightingLevelSystem extends createSystem({
         sw.entity.dispose();
       }
       this.cardEntity?.dispose();
+      this.phone.mesh.removeFromParent();
+      this.hoverTag?.mesh.removeFromParent();
       this.monitor?.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
@@ -331,6 +380,9 @@ export class LightingLevelSystem extends createSystem({
       }
       this.creature.update(delta);
       this.updateScore(delta);
+      this.phone.update(delta);
+      this.placeHud(delta);
+      this.updateHoverTag();
     } catch (error) {
       this.reportError(error);
     }
@@ -372,6 +424,7 @@ export class LightingLevelSystem extends createSystem({
     this.buildMonitor();
     this.buildHouseLights();
     this.buildCard();
+    this.buildHoverTag();
     this.initOrbit();
     this.ready = true;
 
@@ -380,6 +433,8 @@ export class LightingLevelSystem extends createSystem({
     if (start === 0) {
       this.phase = 'title';
       this.showTitleCard();
+    } else {
+      this.phone.text('dee', this.level.tip);
     }
 
     if (import.meta.env.DEV) {
@@ -405,12 +460,34 @@ export class LightingLevelSystem extends createSystem({
           practical: () => this.practical?.on,
           togglePractical: () => this.practical?.switch.toggle(),
           creature: () => this.creature.played,
+          texts: () => this.phone.log.map((t) => `${t.from}: ${t.text}`),
+          card: () => this.card.content,
+          inFrame: () => this.framedFixture()?.item.kind ?? null,
+          // Moves fixture i to an orbit pose around the aim point (for tests).
+          place: (i: number, az: number, el: number, d: number) => {
+            this.roleLocal({ id: 't', label: 't', kinds: [], kindHint: '', orbit: { az, el, d } }, this.fixtures[i].local);
+          },
+          placeAt: (i: number, x: number, y: number, z: number) => {
+            this.fixtures[i].local.set(x, y, z);
+          },
+          switchOn: (i: number, on = true) => {
+            this.fixtures[i].on = on;
+          },
+          hovered: () => this.hoverTag.shown?.item.kind ?? null,
+          enterXR: () => this.world.launchXR(),
+          // Where the lower third and phone sit relative to the viewer's head (meters).
+          hud: () => {
+            const camera = this.world.camera;
+            const card = camera.worldToLocal(this.card.mesh.getWorldPosition(new Vector3()));
+            const phone = camera.worldToLocal(this.phone.mesh.getWorldPosition(new Vector3()));
+            return { immersive: this.immersive, card: card.toArray(), phone: phone.toArray(), phoneVisible: this.phone.mesh.visible };
+          },
           // Screen pixels of a thing, for real-mouse tests: 'card', 'house',
           // 'card-button', a fixture index, or 'role:N' (role N's target spot).
           screenOf: (what: string | number) => {
             const v = new Vector3();
             if (what === 'card' || what === 'card-button') {
-              v.set(what === 'card' ? 0 : -CARD_WIDTH / 2 + 0.06, what === 'card' ? 0 : -CARD_HEIGHT / 2 + 0.022, 0);
+              v.set(what === 'card' ? 0 : CARD_BUTTON_CENTER.x, what === 'card' ? 0 : CARD_BUTTON_CENTER.y, 0);
               this.card.mesh.localToWorld(v);
             } else if (what === 'house') {
               this.houseSwitch.hit.getWorldPosition(v);
@@ -441,8 +518,12 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
-    this.houseOn = true;
+    this.houseOn = this.level.houseStartsOn ?? true;
     this.holdTime = 0;
+    this.inFrameTime = 0;
+    this.inFrameTexted = false;
+    this.hintSince = 0;
+    this.lastHint = '';
     this.framesSinceLoad = 0;
     this.shownText = '';
 
@@ -513,6 +594,12 @@ export class LightingLevelSystem extends createSystem({
       const x = n === 1 ? 0 : -0.18 + (0.36 * i) / (n - 1);
       this.fixtures.push(this.createFixtureEntity(item, x));
     });
+    // Lights the scene starts with already set up (and on).
+    for (const preset of level.preset ?? []) {
+      const fixture = this.fixtures[preset.kit];
+      this.roleLocal({ id: 'preset', label: '', kinds: [], kindHint: '', orbit: preset }, fixture.local);
+      fixture.on = true;
+    }
 
     // One hidden light per role, used only to render the target shot.
     for (const role of level.roles) {
@@ -553,6 +640,7 @@ export class LightingLevelSystem extends createSystem({
     }
     this.greenScreen = undefined;
     this.dragged = null;
+    this.mouseHover = null;
   }
 
   private createFixtureEntity(item: KitItem, kitX: number): Fixture {
@@ -590,6 +678,7 @@ export class LightingLevelSystem extends createSystem({
       handle: object.getObjectByName('fixture-handle'),
       pole: object.getObjectByName('stand-pole')!,
       base: object.getObjectByName('stand-base')!,
+      yoke: object.getObjectByName('fixture-yoke'),
       spot,
       local: new Vector3(kitX, KIT_HEIGHT, KIT_Z),
       on: false,
@@ -608,10 +697,14 @@ export class LightingLevelSystem extends createSystem({
       case 'title':
         this.phase = 'playing';
         this.showBriefCard();
+        this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
+        this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+        this.phone.text('dee', this.level.tip);
         break;
       case 'won':
         if (this.levelIndex < LEVELS.length - 1) {
           this.loadLevel(this.levelIndex + 1);
+          this.phone.text('dee', this.level.tip);
         } else {
           this.rollFinale();
         }
@@ -621,6 +714,7 @@ export class LightingLevelSystem extends createSystem({
         this.showCredits();
         break;
       case 'credits':
+        this.phone.clear();
         this.loadLevel(0);
         this.phase = 'title';
         this.showTitleCard();
@@ -630,8 +724,30 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
+  /** Shows content in the lower third; it only catches rays and clicks while it has a button. */
+  private showCard(content: CardContent): void {
+    this.card.show(content);
+    if (!this.cardEntity) {
+      return;
+    }
+    if (content.button && !this.cardEntity.hasComponent(RayInteractable)) {
+      this.cardEntity.addComponent(RayInteractable);
+    } else if (!content.button && this.cardEntity.hasComponent(RayInteractable)) {
+      this.cardEntity.removeComponent(RayInteractable);
+    }
+  }
+
+  private pickDirectorLine(): string {
+    let i = Math.floor(Math.random() * DIRECTOR_WINS.length);
+    if (i === this.lastDirectorLine) {
+      i = (i + 1) % DIRECTOR_WINS.length;
+    }
+    this.lastDirectorLine = i;
+    return DIRECTOR_WINS[i];
+  }
+
   private showTitleCard(): void {
-    this.card.show({
+    this.showCard({
       eyebrow: 'Lucky Break',
       title: 'Twelve years as Background Extra #47.',
       body: "Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.",
@@ -642,8 +758,8 @@ export class LightingLevelSystem extends createSystem({
 
   private showBriefCard(): void {
     const level = this.level;
-    this.card.show({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title}`,
+    this.showCard({
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title} · Director`,
       title: level.quote,
       body: level.objective,
       footer: `Kit: ${level.kit.map(itemName).join(', ')}.`,
@@ -652,9 +768,9 @@ export class LightingLevelSystem extends createSystem({
 
   private showWinCard(): void {
     const last = this.levelIndex === LEVELS.length - 1;
-    this.card.show({
+    this.showCard({
       eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · Cut!`,
-      title: last ? '"Okay. Okay. Everybody quiet. Roll it."' : '"Cut! That\'s the one. Moving on!"',
+      title: last ? '"Okay. Okay. Everybody quiet. Roll it."' : this.pickDirectorLine(),
       body: this.level.lesson,
       footer: this.level.after || undefined,
       button: last ? 'Roll!' : 'Next scene',
@@ -674,7 +790,7 @@ export class LightingLevelSystem extends createSystem({
     }
     this.renderTargetShot();
     this.drawLabel(100, 'DIRECTOR: "Is that... Lake Como? I\'m crying."', '"WHO ARE YOU?"');
-    this.card.show({
+    this.showCard({
       eyebrow: 'Rolling · Final scene',
       title: '"Is that Lake Como? I\'m crying. Who ARE you?"',
       body: 'The green screen is gone. The couple is on a terrace above the lake at sunset, and the light on their faces matches it.',
@@ -684,7 +800,7 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private showCredits(): void {
-    this.card.show({
+    this.showCard({
       eyebrow: "That's a wrap",
       title: 'LUCKY BREAK',
       body: 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
@@ -851,12 +967,23 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private updateFixture(fixture: Fixture): void {
-    // Stretch the stand from the yoke down to the floor.
-    const height = Math.max(fixture.local.y, 0.014);
-    const poleLength = Math.max(height - 0.012, 0.001);
-    fixture.pole.scale.y = poleLength;
-    fixture.pole.position.y = -0.012 - poleLength / 2;
-    fixture.base.position.y = -height;
+    if (fixture.local.y >= HANG_HEIGHT) {
+      // High up, the light hangs from the grid: the pipe runs up to the ceiling.
+      const poleLength = Math.max(STAGE_HEIGHT - fixture.local.y - 0.012, 0.001);
+      fixture.pole.scale.y = poleLength;
+      fixture.pole.position.y = 0.012 + poleLength / 2;
+      fixture.base.visible = false;
+      if (fixture.yoke) fixture.yoke.rotation.z = Math.PI;
+    } else {
+      // Stretch the stand from the yoke down to the floor.
+      const height = Math.max(fixture.local.y, 0.014);
+      const poleLength = Math.max(height - 0.012, 0.001);
+      fixture.pole.scale.y = poleLength;
+      fixture.pole.position.y = -0.012 - poleLength / 2;
+      fixture.base.position.y = -height;
+      fixture.base.visible = true;
+      if (fixture.yoke) fixture.yoke.rotation.z = 0;
+    }
 
     const aim = fixture.item.aim === 'screen' ? this.screenWorld : this.aimWorld;
     fixture.head.lookAt(aim);
@@ -921,6 +1048,10 @@ export class LightingLevelSystem extends createSystem({
     renderer.xr.enabled = false;
     this.monitor.visible = false;
     this.card.mesh.visible = false;
+    const phoneVisible = this.phone.mesh.visible;
+    this.phone.mesh.visible = false;
+    const tagVisible = this.hoverTag.mesh.visible;
+    this.hoverTag.mesh.visible = false;
     this.cameraRig.visible = false;
     for (const fixture of this.fixtures) {
       fixture.object.visible = showFixtures;
@@ -941,6 +1072,8 @@ export class LightingLevelSystem extends createSystem({
       }
       this.cameraRig.visible = true;
       this.card.mesh.visible = true;
+      this.phone.mesh.visible = phoneVisible;
+      this.hoverTag.mesh.visible = tagVisible;
       this.monitor.visible = true;
       renderer.xr.enabled = xrEnabled;
     }
@@ -1015,28 +1148,29 @@ export class LightingLevelSystem extends createSystem({
   private evaluate(): { score: number; hint: string } {
     const level = this.level;
     const on = this.fixtures.filter((f) => f.on);
-    // Greedy assignment: each role takes its best-fitting switched-on light of the right kind.
+    // Best assignment of switched-on lights to roles, so two lights of the same
+    // kind (say the left and right SCREEN panels) each count for the role whose
+    // spot they are actually in, whichever was switched on first.
+    const choice = this.bestAssignment(level.roles, on);
     const used = new Set<Fixture>();
-    const assigned: { role: Role; fixture?: Fixture; fit: number }[] = [];
-    for (const role of level.roles) {
-      let best: Fixture | undefined;
-      let bestFit = -1;
-      for (const fixture of on) {
-        if (used.has(fixture) || !this.fits(role, fixture)) continue;
-        const fit = this.roleFit(role, fixture.local);
-        if (fit > bestFit) {
-          best = fixture;
-          bestFit = fit;
-        }
-      }
-      if (best) used.add(best);
-      assigned.push({ role, fixture: best, fit: best ? bestFit : 0 });
-    }
+    const assigned: { role: Role; fixture?: Fixture; fit: number }[] = level.roles.map((role, i) => {
+      const fixture = choice[i];
+      if (fixture) used.add(fixture);
+      return { role, fixture, fit: fixture ? this.roleFit(role, fixture.local) : 0 };
+    });
     const extras = on.filter((f) => !used.has(f));
     let fit = assigned.reduce((sum, a) => sum + a.fit, 0) / Math.max(assigned.length, 1);
     fit *= Math.pow(0.6, extras.length);
     let score = Math.round(fit * 100);
 
+    // Gear the camera can see ruins the take, whatever else is right.
+    const framed = this.framedFixture();
+    if (framed) {
+      return {
+        score: Math.min(score, 40),
+        hint: `The ${itemName(framed.item)} is in the shot! Move it out of frame.`,
+      };
+    }
     if (this.houseOn) {
       return { score: Math.min(score, 45), hint: 'The house lights flatten everything. Hit the HOUSE switch.' };
     }
@@ -1063,6 +1197,58 @@ export class LightingLevelSystem extends createSystem({
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
     return { score, hint: this.placeHint(worst.role, worst.fixture!) };
+  }
+
+  /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
+  private bestAssignment(roles: Role[], on: Fixture[]): (Fixture | undefined)[] {
+    let best: (Fixture | undefined)[] = roles.map(() => undefined);
+    let bestTotal = -1;
+    const current: (Fixture | undefined)[] = [];
+    const used = new Set<Fixture>();
+    const search = (i: number, total: number) => {
+      if (i === roles.length) {
+        // Prefer more filled roles, then a higher total fit.
+        const filled = current.filter(Boolean).length;
+        const value = filled * 10 + total;
+        if (value > bestTotal) {
+          bestTotal = value;
+          best = current.slice();
+        }
+        return;
+      }
+      for (const fixture of on) {
+        if (used.has(fixture) || !this.fits(roles[i], fixture)) continue;
+        used.add(fixture);
+        current[i] = fixture;
+        search(i + 1, total + this.roleFit(roles[i], fixture.local));
+        used.delete(fixture);
+      }
+      current[i] = undefined;
+      search(i + 1, total);
+    };
+    search(0, 0);
+    return best;
+  }
+
+  /**
+   * The first light (on or off) the cine camera can see: its head or any part
+   * of its stand inside the frame. Kit lights parked behind the camera never count.
+   */
+  private framedFixture(): Fixture | undefined {
+    for (const fixture of this.fixtures) {
+      const { x, y, z } = fixture.local;
+      const hung = y >= HANG_HEIGHT;
+      const end = hung ? STAGE_HEIGHT : 0;
+      for (let i = 0; i <= 8; i++) {
+        this.v4.set(x, y + ((end - y) * i) / 8, z);
+        this.stage.localToWorld(this.v4);
+        this.v4.project(this.shotCamera);
+        if (this.v4.z > -1 && this.v4.z < 1 && Math.abs(this.v4.x) < 0.98 && Math.abs(this.v4.y) < 0.98) {
+          return fixture;
+        }
+      }
+    }
+    return undefined;
   }
 
   private placeHint(role: Role, fixture: Fixture): string {
@@ -1118,14 +1304,45 @@ export class LightingLevelSystem extends createSystem({
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
       this.chime.play().catch(() => undefined);
-      this.drawLabel(score, 'DIRECTOR: "That\'s the look! Who ARE you?"', this.level.lesson);
+      this.drawLabel(score, `CUT! MATCH ${score}%`, this.level.lesson);
       this.showWinCard();
+      this.phone.text('dee', DEE_WINS[Math.floor(Math.random() * DEE_WINS.length)]);
+      for (const text of this.level.texts ?? []) {
+        this.phone.text(text.from, text.text);
+      }
       return;
     }
+    this.updateNudges(delta, score, hint);
     const text = `${score}|${hint}|${this.creature.active}`;
     if (text !== this.shownText) {
       this.shownText = text;
       this.drawLabel(score, `MATCH ${score}%`, hint);
+    }
+  }
+
+  /** Dee texts when a light sits in the shot, or when the player has been stuck on one hint for a while. */
+  private updateNudges(delta: number, score: number, hint: string): void {
+    const framed = this.framedFixture();
+    this.inFrameTime = framed ? this.inFrameTime + delta : 0;
+    if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted) {
+      this.inFrameTexted = true;
+      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`);
+    }
+    if (!framed && this.inFrameTime === 0 && this.inFrameTexted && score > 40) {
+      this.inFrameTexted = false;
+    }
+    this.sinceNudge += delta;
+    if (hint !== this.lastHint) {
+      this.lastHint = hint;
+      this.hintSince = 0;
+      return;
+    }
+    this.hintSince += delta;
+    if (this.hintSince > NUDGE_SECONDS && this.sinceNudge > NUDGE_SECONDS && hint !== this.lastNudge && !framed) {
+      this.lastNudge = hint;
+      this.sinceNudge = 0;
+      const lead = ['psst. ', 'from here: ', 'tip: '][Math.floor(Math.random() * 3)];
+      this.phone.text('dee', lead + hint.charAt(0).toLowerCase() + hint.slice(1));
     }
   }
 
@@ -1233,13 +1450,125 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private buildCard(): void {
-    const mesh = this.card.mesh;
-    // Left of the stage, angled toward the player, like a call sheet on a stand.
-    this.stage.getWorldPosition(this.v1);
-    mesh.position.set(this.v1.x - 0.43, this.v1.y + 0.33, this.v1.z + 0.05);
-    mesh.rotation.set(-0.1, 0.5, 0);
-    this.cardEntity = this.world.createTransformEntity(mesh);
-    this.cardEntity.addComponent(RayInteractable);
+    // The lower third and the phone are placed in front of the view every frame (placeHud).
+    this.cardEntity = this.world.createTransformEntity(this.card.mesh);
+    this.showCard(this.card.content);
+    this.world.scene.add(this.phone.mesh);
+  }
+
+  /**
+   * Keeps the lower third and the phone at the bottom of the view. In the
+   * browser they are fixed to the screen (the view orbits with the mouse);
+   * in the headset they drift after your head so they never feel bolted on.
+   */
+  private placeHud(delta: number): void {
+    const camera = this.world.camera;
+    camera.updateMatrixWorld();
+    camera.getWorldPosition(this.headWorld);
+    const card = this.card.mesh;
+    const phone = this.phone.mesh;
+    const bounce = Math.sin(this.phone.pop * Math.PI) * 0.012;
+    if (!this.immersive) {
+      // Fit both into the bottom of the browser window.
+      const d = HUD_DESKTOP_DISTANCE;
+      const halfH = d * Math.tan(MathUtils.degToRad(camera.fov / 2));
+      const halfW = halfH * camera.aspect;
+      const margin = halfH * 0.05;
+      const phoneScale = Math.min(1, (halfH * 0.6) / PHONE_HEIGHT);
+      const phoneW = PHONE_WIDTH * phoneScale;
+      const cardScale = Math.min(0.85, (halfW * 2 - 2 * (phoneW + 2 * margin)) / CARD_WIDTH);
+      card.scale.setScalar(cardScale);
+      phone.scale.setScalar(phoneScale);
+      this.hudTarget.set(0, -halfH + margin + (CARD_HEIGHT * cardScale) / 2, -d);
+      card.position.copy(camera.localToWorld(this.hudTarget));
+      card.quaternion.copy(camera.getWorldQuaternion(card.quaternion));
+      this.hudTarget.set(halfW - margin - phoneW / 2, -halfH + margin + (PHONE_HEIGHT * phoneScale) / 2 + bounce, -d + 0.001);
+      phone.position.copy(camera.localToWorld(this.hudTarget));
+      phone.quaternion.copy(card.quaternion);
+      this.hudPlaced = false;
+      return;
+    }
+    card.scale.setScalar(1);
+    phone.scale.setScalar(1);
+    const follow = this.hudPlaced ? 1 - Math.exp(-delta * 3) : 1;
+    this.hudPlaced = true;
+    this.hudTarget.copy(HUD_CARD_OFFSET);
+    camera.localToWorld(this.hudTarget);
+    card.position.lerp(this.hudTarget, follow);
+    card.lookAt(this.headWorld);
+    this.hudTarget.copy(HUD_PHONE_OFFSET);
+    this.hudTarget.y += bounce;
+    camera.localToWorld(this.hudTarget);
+    phone.position.lerp(this.hudTarget, follow);
+    phone.lookAt(this.headWorld);
+  }
+
+  /** One shared label that floats over whichever light the pointer is on, saying what it is. */
+  private buildHoverTag(): void {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 170;
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    const mesh = new Mesh(
+      new PlaneGeometry(0.12, 0.0319),
+      new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false, depthTest: false, depthWrite: false }),
+    );
+    mesh.name = 'hover-tag';
+    mesh.renderOrder = 1002;
+    mesh.visible = false;
+    this.world.scene.add(mesh);
+    this.hoverTag = { mesh, canvas, texture };
+  }
+
+  private updateHoverTag(): void {
+    let fixture: Fixture | undefined;
+    if (this.immersive) {
+      fixture = this.fixtures.find((f) => f.entity.hasComponent(Hovered) || f.entity.hasComponent(Grabbed));
+    } else {
+      fixture = this.dragged ?? this.mouseHover ?? undefined;
+    }
+    const tag = this.hoverTag;
+    if (fixture !== tag.shown) {
+      tag.shown = fixture;
+      if (fixture) {
+        devLog(`hover ${fixture.item.kind}`);
+        this.drawHoverTag(fixture.item);
+      }
+    }
+    tag.mesh.visible = Boolean(fixture);
+    if (!fixture) {
+      return;
+    }
+    fixture.object.getWorldPosition(tag.mesh.position);
+    tag.mesh.position.y += fixture.item.aim === 'screen' || fixture.item.gel ? 0.05 : 0.038;
+    this.world.camera.getWorldQuaternion(tag.mesh.quaternion);
+  }
+
+  private drawHoverTag(item: KitItem): void {
+    const { canvas, texture } = this.hoverTag;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return;
+    }
+    const info = KIND_INFO[item.kind];
+    const extra = item.aim === 'screen' ? ' · for the green screen' : item.gel === 'cto' ? ' · orange gel (warm)' : '';
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(12, 12, 14, 0.9)';
+    ctx.beginPath();
+    ctx.roundRect(0, 0, canvas.width, canvas.height, 28);
+    ctx.fill();
+    ctx.fillStyle = '#f5d90a';
+    ctx.font = 'bold 54px system-ui, sans-serif';
+    ctx.fillText(info.name, 28, 68);
+    const nameWidth = ctx.measureText(info.name).width;
+    ctx.fillStyle = '#9ad1a8';
+    ctx.font = 'bold 30px system-ui, sans-serif';
+    ctx.fillText(extra.replace(' · ', ''), 28 + nameWidth + 22, 66);
+    ctx.fillStyle = '#e4e4e7';
+    ctx.font = '34px system-ui, sans-serif';
+    ctx.fillText(info.what, 28, 130);
+    texture.needsUpdate = true;
   }
 
   /**
@@ -1319,7 +1648,8 @@ export class LightingLevelSystem extends createSystem({
   /** Starts the orbit from wherever the configured desktop camera is. */
   private initOrbit(): void {
     this.stage.getWorldPosition(this.pivot);
-    this.pivot.y += 0.1;
+    // Aim a little low so the set sits in the upper part of the window, above the lower third.
+    this.pivot.y += 0.02;
     this.world.camera.getWorldPosition(this.v1);
     this.v1.sub(this.pivot);
     this.orbit.radius = this.v1.length();
@@ -1376,8 +1706,9 @@ export class LightingLevelSystem extends createSystem({
         press = sw.toggle;
       }
     }
-    const cardHit = this.raycaster.intersectObject(this.card.mesh, false)[0];
-    if (cardHit && cardHit.distance < nearest) {
+    // The lower third sits on top of everything, so it wins when it has a button.
+    const cardHit = this.card.hasButton && this.raycaster.intersectObject(this.card.mesh, false)[0];
+    if (cardHit) {
       fixtureHit = null;
       press = () => this.pressCard();
     }
@@ -1416,6 +1747,18 @@ export class LightingLevelSystem extends createSystem({
         this.stage.worldToLocal(this.v1);
         this.dragged.local.x = this.v1.x;
         this.dragged.local.z = this.v1.z;
+      }
+    } else if (!this.orbiting && this.ready && !this.immersive) {
+      // Hovering: which light is under the pointer, for its name label.
+      this.setPointerRay(event.clientX, event.clientY);
+      let nearest = Infinity;
+      this.mouseHover = null;
+      for (const fixture of this.fixtures) {
+        const hit = this.raycaster.intersectObject(fixture.object, true)[0];
+        if (hit && hit.distance < nearest) {
+          nearest = hit.distance;
+          this.mouseHover = fixture;
+        }
       }
     } else if (this.orbiting) {
       const dx = event.clientX - this.lastPointer.x;
