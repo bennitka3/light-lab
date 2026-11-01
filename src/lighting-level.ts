@@ -28,6 +28,7 @@ import {
   Raycaster,
   SpotLight,
   SRGBColorSpace,
+  SessionMode,
   Vector2,
   Vector3,
   VisibilityState,
@@ -337,6 +338,10 @@ export class LightingLevelSystem extends createSystem({
   /** How big the player wants the iPad (the - and + buttons), remembered between visits. */
   private ipadZoom = loadZoom();
   private canEnterXR = false;
+  /** Session types this browser says it can start, best first (passthrough, then VR). */
+  private xrModes: SessionMode[] = [];
+  /** What happened on the last "Play in VR" press, shown on the title page if it failed. */
+  private xrStatus = '';
   private mouseHover: Fixture | null = null;
   private lastDirectorLine = -1;
   // The director turning to look at you before a line.
@@ -404,7 +409,9 @@ export class LightingLevelSystem extends createSystem({
         xr.isSessionSupported('immersive-vr').catch(() => false),
       ]).then(([ar, vr]) => {
         this.canEnterXR = ar || vr;
+        this.xrModes = [...(ar ? [SessionMode.ImmersiveAR] : []), ...(vr ? [SessionMode.ImmersiveVR] : [])];
         if (this.ready && this.phase === 'title') this.showTitleCard();
+        if (this.ready) this.ipad.setVrButton(this.canEnterXR && !this.immersive);
       });
     }
     this.cleanupFuncs.push(
@@ -412,6 +419,7 @@ export class LightingLevelSystem extends createSystem({
         const wasImmersive = this.immersive;
         this.immersive = state !== VisibilityState.NonImmersive;
         if (this.immersive) sfx.unlock();
+        if (this.ready) this.ipad.setVrButton(this.canEnterXR && !this.immersive);
         if (this.ready && this.phase === 'title' && wasImmersive !== this.immersive) this.showTitleCard();
         this.dragged = null;
         this.orbiting = false;
@@ -545,6 +553,7 @@ export class LightingLevelSystem extends createSystem({
     this.buildCard();
     this.initOrbit();
     this.ready = true;
+    this.ipad.setVrButton(this.canEnterXR && !this.immersive);
 
     // A ?scene=N link still opens on the title page, so the iPad's "Play in VR"
     // button is there (ben, round 6: jumping to a scene left no way into VR).
@@ -611,7 +620,8 @@ export class LightingLevelSystem extends createSystem({
             const at = this.stage.worldToLocal(op.getWorldPosition(new Vector3()));
             return { at: at.toArray(), rig: this.cameraRig.position.toArray() };
           },
-          enterXR: () => this.world.launchXR(),
+          enterXR: () => this.enterHeadset(),
+          xrStatus: () => this.xrStatus,
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
             const camera = this.world.camera;
@@ -1025,6 +1035,8 @@ export class LightingLevelSystem extends createSystem({
           ],
       footer: headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
+        : this.xrStatus
+        ? this.xrStatus
         : this.canEnterXR
         ? 'In the headset browser? If it asks to allow immersive mode, press Allow first.'
         : 'Seven scenes. Zero qualifications. On a Quest? Open this page there to play in VR.',
@@ -1226,11 +1238,60 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /** Acts on a press on the iPad. */
+  /**
+   * "Play in VR": asks for passthrough (the dollhouse on your desk) and falls
+   * back to plain VR when that fails, e.g. on a Quest 1 (ben, round 6: the
+   * button did nothing on his Quest 1 while Go worked). If neither starts, the
+   * browser's reason shows on the title page so we can see why.
+   */
+  private enterHeadset(modes: SessionMode[] = this.xrModes.length ? this.xrModes : [SessionMode.ImmersiveVR]): void {
+    const [mode, ...rest] = modes;
+    devLog(`asking the browser for ${mode}`);
+    // launchXR reports a refused request only on the console; catch that one message.
+    const consoleError = console.error;
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      console.error = consoleError;
+    };
+    console.error = (...args: unknown[]) => {
+      consoleError(...args);
+      if (typeof args[0] === 'string' && args[0].startsWith('[XR] Failed to start XR session')) {
+        restore();
+        const reason = args[1] instanceof Error ? `${args[1].name}: ${args[1].message}` : String(args[1]);
+        if (rest.length) {
+          // launchXR clears its pending flag just after it reports, so retry on the next tick.
+          setTimeout(() => this.enterHeadset(rest), 0);
+        } else {
+          this.xrStatus = `VR didn't start (${reason.slice(0, 90)}). Try the browser's own VR button, or reload.`;
+          if (this.phase === 'title' && !this.immersive) this.showTitleCard();
+        }
+      }
+    };
+    setTimeout(restore, 8000);
+    this.xrStatus = '';
+    if (this.world.sessionRequestPending) {
+      // An earlier press is still waiting on the browser; launchXR would ignore this one.
+      restore();
+      this.xrStatus = 'Still waiting for the browser to start VR... check for a prompt, or reload.';
+      if (this.phase === 'title') this.showTitleCard();
+      return;
+    }
+    try {
+      this.world.launchXR({ sessionMode: mode });
+    } catch (error) {
+      restore();
+      this.xrStatus = `VR didn't start (${String(error).slice(0, 90)}).`;
+      if (this.phase === 'title') this.showTitleCard();
+    }
+  }
+
   private pressIpad(control: IPadControl): void {
     if (control.type === 'main') {
       this.pressCard();
     } else if (control.type === 'second') {
-      this.world.launchXR();
+      this.enterHeadset();
     } else if (control.type === 'size') {
       this.zoomIpad(control.step);
     } else if (control.type === 'light') {

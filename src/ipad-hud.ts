@@ -106,6 +106,15 @@ export class IPad {
   private highlight = -1;
   /** Where each control was last drawn, in canvas pixels, for presses. */
   private rects: Rect[] = [];
+  /** Show a "VR" button on the play strip (this browser can start a headset session, and isn't in one). */
+  private vrButton = false;
+
+  setVrButton(on: boolean): void {
+    if (on === this.vrButton) return;
+    this.vrButton = on;
+    this.draw();
+  }
+
   /** Draws something over the live shot (used by a special effect); called on every redraw. */
   overLive?: (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => boolean;
 
@@ -335,6 +344,19 @@ export class IPad {
       // A generous hit box: the visible circle plus a margin.
       this.rects.push({ x: bx - m(0.002), y: by - m(0.003), w: sz + m(0.004), h: sz + m(0.006), control: { type: 'size', step: i === 0 ? -1 : 1 } });
     });
+    if (this.vrButton) {
+      // "VR": jump into the headset from any point in the game, left of the size buttons.
+      const vw = m(0.03);
+      const vx = W - pad - 2 * sz - m(0.004) - m(0.006) - vw;
+      const vy = m(SHOT_TOP - 0.004) - sz + m(0.002);
+      roundRect(ctx, vx, vy, vw, sz, sz / 2);
+      ctx.fillStyle = '#f5d90a';
+      ctx.fill();
+      ctx.fillStyle = '#18181b';
+      ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
+      ctx.fillText('VR', vx + (vw - ctx.measureText('VR').width) / 2, vy + sz / 2 + m(0.003));
+      this.rects.push({ x: vx - m(0.002), y: vy - m(0.003), w: vw + m(0.004), h: sz + m(0.006), control: { type: 'second' } });
+    }
 
     // Match bar under the shots.
     const barTop = m(SHOT_TOP + SHOT_H + 0.004);
