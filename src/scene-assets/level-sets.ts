@@ -107,9 +107,8 @@ function backdrop(texture: CanvasTexture, glow: number, name: string): Mesh {
   return mesh;
 }
 
-function createInterviewSet(): Group {
-  const set = new Group();
-  // A bookshelf behind the expert, far enough back to fall into shadow.
+/** A bookshelf full of books, 0.14 wide and 0.16 tall, its back at z = 0. */
+function createBookshelf(): Group {
   const shelfWood = mat('#4a3020', 0.7);
   const shelf = new Group();
   shelf.add(block(0.14, 0.16, 0.02, shelfWood, 0, 0.08, 0));
@@ -127,20 +126,109 @@ function createInterviewSet(): Group {
       i++;
     }
   }
-  shelf.position.set(-0.06, 0, -0.17);
-  // A plant on a stand camera-right.
-  const plant = new Group();
-  plant.add(cylinder(0.009, 0.007, 0.018, mat('#9a5b3c', 0.8), 0, 0.009, 0));
-  for (let i = 0; i < 7; i++) {
-    const leaf = new Mesh(new SphereGeometry(0.008, 10, 8), mat('#2f6b3a', 0.7));
-    leaf.scale.set(0.6, 1.8, 0.3);
-    leaf.position.set(Math.sin(i) * 0.006, 0.03 + (i % 3) * 0.006, Math.cos(i) * 0.006);
-    leaf.rotation.z = Math.sin(i * 2) * 0.6;
-    leaf.castShadow = true;
-    plant.add(leaf);
+  return shelf;
+}
+
+/**
+ * Scene 2 is shot on location, not on a stage: a professor's study built
+ * inside the soundstage walls. Wood-panelled walls, two bookshelves, a
+ * daylight window, a desk with a banker's lamp, and his armchair.
+ */
+function createStudySet(): Group {
+  const set = new Group();
+  // Wood panelling with a picture rail, on the back wall and both side walls.
+  const panelling = paintTexture(1024, 600, (ctx) => {
+    ctx.fillStyle = '#5a3a24';
+    ctx.fillRect(0, 0, 1024, 600);
+    for (let x = 0; x < 1024; x += 128) {
+      ctx.fillStyle = '#4a2f1c';
+      ctx.fillRect(x + 12, 250, 104, 330);
+      ctx.fillStyle = '#6b4630';
+      ctx.fillRect(x + 18, 256, 92, 318);
+    }
+    ctx.fillStyle = '#3b2616';
+    ctx.fillRect(0, 230, 1024, 14);
+    ctx.fillStyle = '#7a6a52';
+    ctx.fillRect(0, 0, 1024, 230);
+    ctx.globalAlpha = 0.08;
+    for (let y = 0; y < 230; y += 6) {
+      ctx.fillStyle = y % 12 === 0 ? '#000' : '#fff';
+      ctx.fillRect(0, y, 1024, 3);
+    }
+    ctx.globalAlpha = 1;
+  });
+  const wallMaterial = new MeshStandardMaterial({ map: panelling, roughness: 0.85 });
+  const back = new Mesh(new PlaneGeometry(STAGE_WIDTH - 0.01, STAGE_HEIGHT - 0.01), wallMaterial);
+  back.position.set(0, STAGE_HEIGHT / 2, BACK_WALL_Z + 0.001);
+  back.receiveShadow = true;
+  set.add(back);
+  for (const side of [-1, 1]) {
+    const wall = new Mesh(new PlaneGeometry(STAGE_DEPTH - 0.01, STAGE_HEIGHT - 0.01), wallMaterial);
+    wall.position.set(side * (STAGE_WIDTH / 2 - 0.007), STAGE_HEIGHT / 2, 0);
+    wall.rotation.y = -side * (Math.PI / 2);
+    wall.receiveShadow = true;
+    set.add(wall);
   }
-  plant.position.set(0.09, 0, -0.15);
-  set.add(shelf, plant);
+  // A herringbone-ish wood floor and a rug.
+  const floor = block(STAGE_WIDTH - 0.01, 0.001, STAGE_DEPTH - 0.01, mat('#6b4a2e', 0.6), 0, 0.0005, 0);
+  floor.castShadow = false;
+  const rug = block(0.15, 0.001, 0.11, mat('#3f2a4a', 0.95), 0, 0.0012, -0.05);
+  rug.castShadow = false;
+  set.add(floor, rug);
+
+  // His armchair, turned with him.
+  set.add(createSeat('armchair', 0, -0.06, -0.35));
+
+  // Bookshelves on either side of a daylight window.
+  const left = createBookshelf();
+  left.position.set(-0.15, 0, -0.18);
+  const right = createBookshelf();
+  right.scale.set(0.8, 1, 1);
+  right.position.set(0.16, 0, -0.18);
+  const windowFrame = block(0.075, 0.1, 0.004, mat('#e5e1d8', 0.7), 0.02, 0.15, -0.193);
+  const sky = block(
+    0.065,
+    0.09,
+    0.001,
+    new MeshStandardMaterial({ color: '#9cc3e6', emissive: '#b9d8f5', emissiveIntensity: 0.5 }),
+    0.02,
+    0.15,
+    -0.19,
+  );
+  const mullion = block(0.002, 0.09, 0.002, mat('#e5e1d8', 0.7), 0.02, 0.15, -0.189);
+  const transom = block(0.065, 0.002, 0.002, mat('#e5e1d8', 0.7), 0.02, 0.15, -0.189);
+  set.add(left, right, windowFrame, sky, mullion, transom);
+
+  // A desk camera-right with a green banker's lamp (set dressing, glowing softly).
+  const desk = new Group();
+  const deskWood = mat('#3b2418', 0.5);
+  desk.add(block(0.07, 0.003, 0.035, deskWood, 0, 0.052, 0));
+  desk.add(block(0.02, 0.05, 0.033, deskWood, -0.025, 0.025, 0));
+  desk.add(block(0.02, 0.05, 0.033, deskWood, 0.025, 0.025, 0));
+  desk.add(block(0.012, 0.0015, 0.016, mat('#e8e2d0', 0.8), -0.012, 0.0545, 0.004));
+  desk.add(cylinder(0.0015, 0.0015, 0.012, mat('#b08d57', 0.3, 1), 0.02, 0.06, -0.006));
+  const shade = block(
+    0.016,
+    0.005,
+    0.007,
+    new MeshStandardMaterial({ color: '#1f5d3a', emissive: '#ffd59a', emissiveIntensity: 0.25, roughness: 0.4 }),
+    0.02,
+    0.067,
+    -0.004,
+  );
+  desk.add(shade);
+  desk.position.set(0.13, 0, -0.13);
+  desk.rotation.y = -0.4;
+
+  // Framed diplomas on the panelling, camera-left.
+  for (const [x, y] of [
+    [-0.06, 0.2],
+    [-0.06, 0.16],
+  ]) {
+    set.add(block(0.03, 0.022, 0.002, mat('#2a1d14', 0.6), x, y, -0.192));
+    set.add(block(0.025, 0.017, 0.001, mat('#efe8d6', 0.9), x, y, -0.1905));
+  }
+  set.add(desk);
   return set;
 }
 
@@ -374,8 +462,8 @@ function createRestaurantSet(): Group {
 export function createLevelSet(id: SetId): Group {
   let set: Group;
   switch (id) {
-    case 'interview':
-      set = createInterviewSet();
+    case 'study':
+      set = createStudySet();
       break;
     case 'product':
       set = createProductSet();

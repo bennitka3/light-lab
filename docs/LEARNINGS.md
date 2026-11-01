@@ -2,6 +2,30 @@
 
 Notes for whoever (human or Claude) works on this next. Newest first.
 
+## 2026-11-01: playtest round 1 fixes
+
+**"Light in the shot" is a projection test, not a pixel test.** Each frame
+`framedFixture()` projects the light's head and nine points down its stand
+through the cine camera; any point inside the frame fails the take. Kit
+lights are parked behind the camera, so they never count. Overhead lights
+(above 0.17 m stage height) hang from the grid with the pipe going up, which
+is what makes high top/back/screen lights possible without a stand in shot.
+If you add a role, run `scripts/playtest-fixes.cjs`: it checks every scene's
+solution is out of frame.
+
+**Match lights to roles with the best overall assignment.** Greedy
+role-by-role matching credited the first-switched SCREEN panel to "left" no
+matter where it stood. With at most four roles and five lights, trying every
+assignment is instant.
+
+**HUD in front of the view.** The lower third and phone are plain canvas
+meshes with depthTest off and a high renderOrder, hidden during the monitor
+renders. Desktop: fixed to the camera, sized from its fov and aspect.
+Headset: head-space offsets with a lazy follow. The lower third only has
+`RayInteractable` while it shows a button, so it never blocks rays to the
+lights below it. Verified in the emulator: it sits 0.7 m ahead, 0.2 m below
+eye level. Not yet seen on a real Quest.
+
 ## 2026-10-31: seven scenes in one night
 
 **One scene file, levels in code.** All seven scenes share the soundstage in
