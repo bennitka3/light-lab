@@ -104,6 +104,10 @@ const SCREEN_CENTER = new Vector3(0, STAGE_HEIGHT / 2, -STAGE_DEPTH / 2);
 const HEAD_HEIGHT = 0.105;
 // Within this distance of a fixed-position role target counts as a perfect spot.
 const POSITION_TOLERANCE = 0.045;
+/** The house lights left on multiply the match by this (so a perfect setup reads 50% until you cut them). */
+const HOUSE_FACTOR = 0.5;
+/** How far (stage meters, about one small drag) the tip looks ahead when it picks a direction. */
+const TIP_STEP = 0.015;
 // A light raised this high hangs from the grid instead of standing on the floor
 // (its pipe runs up, out of the shot, like a real studio's overhead lights).
 const HANG_HEIGHT = 0.17;
@@ -398,6 +402,12 @@ export class LightingLevelSystem extends createSystem({
   private v2 = new Vector3();
   private v3 = new Vector2();
   private v4 = new Vector3();
+  private v5 = new Vector3();
+  private v6 = new Vector3();
+  /** The move the tip asked for last (which light, axis 0/1/2 = x/y/z, sign), so the tip doesn't flip-flop. */
+  private tipMove = { role: '', axis: -1, sign: 0 };
+  /** "Height looks good." once the player has finished one direction and the tip moves on to another. */
+  private tipDone = '';
   private lensWorld = new Vector3();
   private headWorld = new Vector3();
   private hudTarget = new Vector3();
@@ -574,6 +584,11 @@ export class LightingLevelSystem extends createSystem({
           orbit: this.orbit,
           score: () => this.evaluate().score,
           hint: () => this.evaluate().hint,
+          // The fixture index the tip is about (a light to move), or -1.
+          hintFixture: () => {
+            const f = this.evaluate().fixture;
+            return f ? this.fixtures.indexOf(f) : -1;
+          },
           houseOn: () => this.houseOn,
           setHouse: (on: boolean) => {
             this.houseOn = on;
@@ -913,6 +928,7 @@ export class LightingLevelSystem extends createSystem({
         if (this.levelIndex === 0) {
           this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
           this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+          this.phone.text('dee', "that iPad in your hands is the video village feed. left = the shot the director wants, right = what the camera sees now. make them match");
         }
         this.phone.text('dee', this.level.tip);
         break;
@@ -1554,7 +1570,7 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /** Matches switched-on lights to the scene's roles and scores the setup, with one hint. */
-  private evaluate(): { score: number; hint: string } {
+  private evaluate(): { score: number; hint: string; fixture?: Fixture } {
     const level = this.level;
     const on = this.fixtures.filter((f) => f.on);
     // Best assignment of switched-on lights to roles, so two lights of the same
@@ -1583,14 +1599,17 @@ export class LightingLevelSystem extends createSystem({
     // House lights on: say so until the player has cut them once this scene;
     // after that, leaving them on is on purpose (to see the set), so only
     // mention them once everything else is right. Either way they block the take.
-    const houseCap = this.houseOn ? 45 : 100;
+    // They halve the match rather than capping it, so the bar still climbs as a
+    // light gets closer (Greg's playtest: a bar stuck at 45% gave him nothing to go on).
+    if (this.houseOn) {
+      score = Math.round(score * HOUSE_FACTOR);
+    }
     if (this.houseOn && !this.houseEverOff) {
       return {
-        score: Math.min(score, houseCap),
+        score,
         hint: this.houseTexts < 2 ? 'The house lights flatten everything. Turn them off!' : "Don't forget to cut the house lights.",
       };
     }
-    score = Math.min(score, houseCap);
     if (level.practical && !this.practical?.on) {
       return { score: Math.min(score, 60), hint: 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
@@ -1625,7 +1644,7 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn && worst.fit > 0.85) {
       return { score, hint: 'Looks right. Cut the house lights when you want to roll.' };
     }
-    return { score, hint: this.placeHint(worst.role, worst.fixture!) };
+    return { score, hint: this.placeHint(worst.role, worst.fixture!), fixture: worst.fixture };
   }
 
   /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
@@ -1665,70 +1684,133 @@ export class LightingLevelSystem extends createSystem({
    */
   private framedFixture(): Fixture | undefined {
     for (const fixture of this.fixtures) {
-      const { x, y, z } = fixture.local;
-      const hung = y >= HANG_HEIGHT;
-      const end = hung ? STAGE_HEIGHT : 0;
-      for (let i = 0; i <= 8; i++) {
-        this.v4.set(x, y + ((end - y) * i) / 8, z);
-        this.stage.localToWorld(this.v4);
-        this.v4.project(this.shotCamera);
-        if (this.v4.z > -1 && this.v4.z < 1 && Math.abs(this.v4.x) < 0.98 && Math.abs(this.v4.y) < 0.98) {
-          return fixture;
-        }
+      if (this.inFrameAt(fixture.local)) {
+        return fixture;
       }
     }
     return undefined;
   }
 
-  private placeHint(role: Role, fixture: Fixture): string {
-    const name = role.label;
-    if (role.pos) {
-      const dx = role.pos[0] - fixture.local.x;
-      const dz = role.pos[2] - fixture.local.z;
-      const dy = role.pos[1] - fixture.local.y;
-      if (Math.hypot(dx, dz, dy) < 0.02) return 'Almost there. Hold it...';
-      if (Math.abs(dz) > Math.abs(dx) && Math.abs(dz) > 0.02) {
-        return dz < 0 ? `Move the ${name.toLowerCase()} closer to the screen.` : `Pull the ${name.toLowerCase()} away from the screen a bit.`;
+  /** Would a light standing (or hanging) at this stage-local spot show in the cine camera's frame? */
+  private inFrameAt(local: Vector3): boolean {
+    const { x, y, z } = local;
+    const hung = y >= HANG_HEIGHT;
+    const end = hung ? STAGE_HEIGHT : 0;
+    for (let i = 0; i <= 8; i++) {
+      this.v4.set(x, y + ((end - y) * i) / 8, z);
+      this.stage.localToWorld(this.v4);
+      this.v4.project(this.shotCamera);
+      if (this.v4.z > -1 && this.v4.z < 1 && Math.abs(this.v4.x) < 0.98 && Math.abs(this.v4.y) < 0.98) {
+        return true;
       }
-      if (Math.abs(dx) > 0.02) {
-        return dx < 0 ? `Move the ${name.toLowerCase()} toward camera-left.` : `Move the ${name.toLowerCase()} toward camera-right.`;
-      }
-      return dy > 0 ? `Raise the ${name.toLowerCase()}.` : `Lower the ${name.toLowerCase()}.`;
     }
-    const pose = this.poseOf(fixture.local);
-    const { az, el, d } = role.orbit!;
-    let dAz = pose.azimuth - az;
-    if (dAz > 180) dAz -= 360;
-    if (dAz < -180) dAz += 360;
-    const dEl = pose.elevation - el;
-    const ratio = pose.distance / d;
-    const lower = name.toLowerCase();
-    // Hint at whichever error costs the most score (same weights as roleFit).
-    const tAz = (dAz / 25) ** 2;
-    const tEl = (dEl / 20) ** 2;
-    const tD = (Math.log(ratio) / 0.35) ** 2;
-    if (tAz + tEl + tD < 0.05) {
+    return false;
+  }
+
+  /**
+   * The tip for a light that is on and in the right role but not on its spot.
+   *
+   * It tries a small move in each of the six directions (left/right, up/down,
+   * back/forward) and names the one that raises the match the most, so the tip
+   * always points somewhere that helps, height included. It then sticks with that
+   * direction while it still helps, instead of flipping to whichever direction is
+   * a hair better (Greg's playtest: the old tip ping-ponged camera-left/right on
+   * the top light when the real problem was its height). When a direction is done
+   * and the tip moves on, it says so ("Height looks good."). "Nudge" means one
+   * full step would overshoot.
+   */
+  private placeHint(role: Role, fixture: Fixture): string {
+    const lower = role.label.toLowerCase();
+    const here = fixture.local;
+    const fit = this.roleFit(role, here);
+    if (fit > 0.95) {
+      this.tipMove.axis = -1;
       return 'Almost there. Hold it...';
     }
     const target = this.roleLocal(role, this.v2);
-    if (tEl > tAz && tEl > tD) {
-      if (dEl < 0 && target.y >= HANG_HEIGHT && fixture.local.y < HANG_HEIGHT) {
-        return `Raise the ${lower} until it hangs from the grid.`;
-      }
-      return dEl < 0 ? `Raise the ${lower}.` : `Lower the ${lower}.`;
-    }
-    // Direction and distance errors: say which way to move it across the floor,
-    // in set terms (camera-left/right, back toward the wall, forward toward the camera).
-    const behindCast = target.z < this.aimLocal.z - 0.02;
-    if (behindCast && fixture.local.z > this.aimLocal.z) {
+    // A light that belongs behind the cast but sits in front goes round, not through.
+    if (role.orbit && target.z < this.aimLocal.z - 0.02 && here.z > this.aimLocal.z) {
       return `The ${lower} belongs behind the cast. Move it round the back.`;
     }
-    const dx = target.x - fixture.local.x;
-    const dz = target.z - fixture.local.z;
-    if (Math.abs(dx) >= Math.abs(dz)) {
-      return dx < 0 ? `Move the ${lower} toward camera-left.` : `Move the ${lower} toward camera-right.`;
+    let bestAxis = -1;
+    let bestSign = 0;
+    let bestGain = 0;
+    let keepGain = 0;
+    const kept = this.tipMove.role === role.id ? this.tipMove : undefined;
+    for (let axis = 0; axis < 3; axis++) {
+      for (let sign = -1; sign <= 1; sign += 2) {
+        const gain = this.stepGain(role, here, axis, sign, TIP_STEP, fit);
+        if (kept && kept.axis === axis && kept.sign === sign) keepGain = gain;
+        if (gain > bestGain) {
+          bestGain = gain;
+          bestAxis = axis;
+          bestSign = sign;
+        }
+      }
     }
-    return dz < 0 ? `Move the ${lower} back, away from the camera.` : `Move the ${lower} forward, toward the camera.`;
+    // Keep going the way the tip already said while that still helps about as much.
+    if (kept && kept.axis >= 0 && keepGain > 0.002 && keepGain >= bestGain * 0.5) {
+      bestAxis = kept.axis;
+      bestSign = kept.sign;
+      bestGain = keepGain;
+    }
+    let nudge = false;
+    if (bestGain <= 0.002) {
+      // A full step overshoots every way: try half steps.
+      for (let axis = 0; axis < 3; axis++) {
+        for (let sign = -1; sign <= 1; sign += 2) {
+          const gain = this.stepGain(role, here, axis, sign, TIP_STEP / 2, fit);
+          if (gain > bestGain) {
+            bestGain = gain;
+            bestAxis = axis;
+            bestSign = sign;
+          }
+        }
+      }
+      nudge = true;
+    } else if (this.stepGain(role, here, bestAxis, bestSign, TIP_STEP / 2, fit) > bestGain) {
+      nudge = true; // half a step does better than a whole one
+    }
+    if (bestAxis < 0) {
+      this.tipMove.axis = -1;
+      return 'Almost there. Hold it...';
+    }
+    // Say when the player has finished one direction and the tip moves to another.
+    if (kept && kept.axis >= 0 && kept.axis !== bestAxis) {
+      this.tipDone = ['Left-right looks good. ', 'Height looks good. ', 'Distance looks good. '][kept.axis];
+    } else if (!kept || kept.axis < 0) {
+      this.tipDone = '';
+    }
+    this.tipMove.role = role.id;
+    this.tipMove.axis = bestAxis;
+    this.tipMove.sign = bestSign;
+    const verb = nudge ? 'Nudge' : 'Move';
+    const bit = nudge ? ' a little' : '';
+    let move: string;
+    if (bestAxis === 1) {
+      if (bestSign > 0 && target.y >= HANG_HEIGHT && here.y < HANG_HEIGHT) {
+        move = `Raise the ${lower} until it hangs from the grid.`;
+      } else {
+        move = `${bestSign > 0 ? 'Raise' : 'Lower'} the ${lower}${bit}.`;
+      }
+    } else if (bestAxis === 0) {
+      move = `${verb} the ${lower}${bit} toward camera-${bestSign < 0 ? 'left' : 'right'}.`;
+    } else if (role.pos) {
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
+    } else {
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} back, away from the camera.` : `${verb} the ${lower}${bit} forward, toward the camera.`;
+    }
+    return this.tipDone + move;
+  }
+
+  /** How much the role's fit improves if the light moves `step` along one axis (minus if it gets worse or lands in frame). */
+  private stepGain(role: Role, here: Vector3, axis: number, sign: number, step: number, fit: number): number {
+    const p = this.v6.copy(here);
+    p.setComponent(axis, p.getComponent(axis) + sign * step);
+    if (p.y < 0.01 || this.inFrameAt(p)) {
+      return -1;
+    }
+    return this.roleFit(role, p) - fit;
   }
 
   private updateScore(delta: number): void {

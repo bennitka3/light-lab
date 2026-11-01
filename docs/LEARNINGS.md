@@ -67,6 +67,14 @@ is what makes high top/back/screen lights possible without a stand in shot.
 If you add a role, run `scripts/playtest-fixes.cjs`: it checks every scene's
 solution is out of frame.
 
+**Tips must point the way the score improves.** Scoring by angle around the
+subject but hinting in floor directions made the tip ping-pong on high top
+lights (near the top, a tiny sideways move swings the angle a lot). The tip
+now tries a 1.5 cm move in all six directions against the real score and keeps
+its current direction while that still helps. If you change `roleFit` or add a
+role, run `scripts/follow-hints.cjs`: a bot follows the tips from a knocked-off
+start and must win every trial.
+
 **Match lights to roles with the best overall assignment.** Greedy
 role-by-role matching credited the first-switched SCREEN panel to "left" no
 matter where it stood. With at most four roles and five lights, trying every
