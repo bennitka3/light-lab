@@ -241,6 +241,11 @@ export class IPad {
     return this.page.full ? FULL_BUTTON_CENTER : SMALL_BUTTON_CENTER;
   }
 
+  /** The second button ("Play in VR") center, for tests that click it. */
+  get secondButtonCenter(): { x: number; y: number } {
+    return SECOND_BUTTON_CENTER;
+  }
+
   get isFull(): boolean {
     return Boolean(this.page.full);
   }

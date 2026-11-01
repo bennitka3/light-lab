@@ -542,14 +542,13 @@ export class LightingLevelSystem extends createSystem({
     this.initOrbit();
     this.ready = true;
 
+    // A ?scene=N link still opens on the title page, so the iPad's "Play in VR"
+    // button is there (ben, round 6: jumping to a scene left no way into VR).
+    // Go then starts that scene.
     const start = startLevelFromUrl();
     this.loadLevel(start);
-    if (start === 0) {
-      this.phase = 'title';
-      this.showTitleCard();
-    } else {
-      this.phone.text('dee', this.level.tip);
-    }
+    this.phase = 'title';
+    this.showTitleCard();
 
     if (import.meta.env.DEV) {
       // Lets automated browser tests drive and read the game.
@@ -579,6 +578,7 @@ export class LightingLevelSystem extends createSystem({
           bubble: () => (this.bubble.mesh.visible ? this.bubble.line : null),
           phoneAwake: () => this.phone.awake,
           sounds: () => ({ ...sfx.played }),
+          inXR: () => Boolean(this.world.renderer.xr.getSession()),
           inFrame: () => this.framedFixture()?.item.kind ?? null,
           // Moves fixture i to an orbit pose around the aim point (for tests).
           place: (i: number, az: number, el: number, d: number) => {
@@ -617,6 +617,9 @@ export class LightingLevelSystem extends createSystem({
             const control = typeof what === 'string' ? /^(light|warmer|cooler|size):(-?\d+)$/.exec(what) : null;
             if (what === 'card' || what === 'card-button') {
               v.set(what === 'card' ? 0 : this.ipad.buttonCenter.x, what === 'card' ? 0 : this.ipad.buttonCenter.y, 0);
+              this.ipad.object.localToWorld(v);
+            } else if (what === 'card-button2') {
+              v.set(this.ipad.secondButtonCenter.x, this.ipad.secondButtonCenter.y, 0);
               this.ipad.object.localToWorld(v);
             } else if (control) {
               const n = Number(control[2]);
@@ -874,8 +877,10 @@ export class LightingLevelSystem extends createSystem({
       case 'title':
         this.phase = 'playing';
         this.showBriefCard();
-        this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
-        this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+        if (this.levelIndex === 0) {
+          this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
+          this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+        }
         this.phone.text('dee', this.level.tip);
         break;
       case 'won':
@@ -982,7 +987,7 @@ export class LightingLevelSystem extends createSystem({
     const headset = this.immersive;
     this.showPage({
       full: true,
-      eyebrow: 'Lucky Break · How to play',
+      eyebrow: this.levelIndex > 0 ? `Lucky Break · Starting at scene ${this.levelIndex + 1}` : 'Lucky Break · How to play',
       title: 'Twelve years as Background Extra #47.',
       body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       steps: headset
