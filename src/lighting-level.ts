@@ -332,6 +332,9 @@ export class LightingLevelSystem extends createSystem({
   private directorBlend = 0;
   private pendingLine: { line: string; hold: boolean; wait: number } | null = null;
   private phoneWheel = 0;
+  /** The scene's own cast member hasn't loaded yet (the stand-in actor is sitting in). */
+  private castPending = false;
+  private retakeTarget = false;
   // House lights: has the player cut them this scene (then leaving them on is on purpose),
   // how long the scene has run, and how often Dee has mentioned them all game.
   private houseEverOff = false;
@@ -460,7 +463,8 @@ export class LightingLevelSystem extends createSystem({
       this.aimShotCamera();
       // Capture the target once shadows settle, then refresh it now and then in
       // case the set was moved (for example placed on a desk in the headset).
-      if (this.framesSinceLoad % 90 === 3) {
+      if (this.framesSinceLoad % 90 === 3 || this.retakeTarget) {
+        this.retakeTarget = false;
         this.renderTargetShot();
       }
       // The monitor's live picture is a second full render of the set. In the
@@ -469,6 +473,7 @@ export class LightingLevelSystem extends createSystem({
       if (!this.immersive || this.framesSinceLoad % 3 === 0) {
         this.renderShot(this.shotTarget, true);
       }
+      if (this.castPending && this.framesSinceLoad % 20 === 0) this.seatCastMember();
       this.creature.update(delta);
       this.updateScore(delta);
       this.phone.update(delta);
@@ -658,19 +663,11 @@ export class LightingLevelSystem extends createSystem({
         this.actor.position.set(...first.pos);
         this.actor.rotation.set(0, first.rotY ?? 0, 0);
       }
-      // Some scenes cast someone else in the first seat (the professor in scene 2),
-      // once the art pass has added that model; until then the usual actor sits in.
-      const stand = level.actorAsset ? this.loadedModel(level.actorAsset) : undefined;
-      if (first && stand) {
-        const clone = stand.clone(true);
-        clone.scale.copy(this.actor.scale);
-        clone.position.set(...first.pos);
-        clone.rotation.set(0, first.rotY ?? 0, 0);
-        clone.visible = true;
-        this.actor.visible = false;
-        this.stage.add(clone);
-        this.extraActors.push(clone);
-      }
+      // Some scenes cast someone else in the first seat (the professor in scene 2).
+      // That model loads in the background, so until it arrives the usual actor
+      // sits in, and update() swaps him in as soon as it's there.
+      this.castPending = Boolean(first && level.actorAsset);
+      this.seatCastMember();
       // The second seat goes to the actress (asset "actress", once loaded), else a copy of the actor.
       const actress = this.loadedModel('actress');
       for (const extra of level.actors.slice(1)) {
@@ -742,6 +739,25 @@ export class LightingLevelSystem extends createSystem({
     }
 
     this.showBriefCard();
+  }
+
+  /** Puts the scene's own cast member (LevelDef.actorAsset) in the first seat once the model has loaded. */
+  private seatCastMember(): void {
+    const first = this.level.actors[0];
+    const stand = this.level.actorAsset ? this.loadedModel(this.level.actorAsset) : undefined;
+    if (!this.castPending || !first || !stand || !this.actor) return;
+    this.castPending = false;
+    const clone = stand.clone(true);
+    clone.scale.copy(this.actor.scale);
+    clone.position.set(...first.pos);
+    clone.rotation.set(0, first.rotY ?? 0, 0);
+    clone.visible = true;
+    this.actor.visible = false;
+    this.stage.add(clone);
+    this.extraActors.push(clone);
+    // Retake the director's target shot with him in it on the next frame.
+    this.retakeTarget = true;
+    devLog(`cast ${this.level.actorAsset} seated`);
   }
 
   /** A model from the asset manifest if it is listed and loaded, else undefined. */
