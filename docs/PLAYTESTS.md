@@ -3,6 +3,25 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 6: 2026-11-01 (ben, Quest 1 headset, first time in VR, all seven scenes)
+
+Played start to finish. ben: "it was awesome to play in VR." A little choppy on the Quest 1, which is expected for 2019 hardware. The judges will play on a current Quest.
+
+| ben said | Status |
+|---|---|
+| "the monitor and phone are just outside of like the focus range, so it's not super sharp... the text in the monitors was not really readable... the phone was really not readable, because it was too far off screen and too small" | **Done.** In the headset the iPad and phone now sit about 85 cm out, near the lenses' focus distance, instead of 60 cm. The iPad is about 25% bigger in your view and sits higher. When a text lands, the phone rises to just right of center and grows about 50%; when idle it shrinks back down beside the iPad. Following Meta's guidance (big enough to read, near the middle, no turning your head to reach the edges), they still drift after your head, since ben liked that. |
+| "we should probably give viewers control over that" (phone size) | **Done.** The iPad's - and + buttons now size the phone too, in the headset and the browser. The phone is also a little bigger by default in the browser. |
+| "when they were covering elements in the set, it seemed like your pointer wanted to default to the actual set instead of the menu" | **Done.** The iPad and phone now win over anything behind them when your controller ray crosses them. The empty area above the iPad's strip no longer catches the ray. *Checked in code; not yet tried in a headset.* |
+| "it was kind of difficult to grab the lights" | **Done.** Each light's grab bubble is about 50% bigger (it was 2.6 cm across the dollhouse, now 3.8 cm) and a little fainter, so it doesn't add clutter. |
+| "we need sound effects for the text messages" | **Done.** A two-note chime and a short controller buzz when a text or Mom's notification lands. The sounds are generated in the browser, so there are no audio files. |
+| "there should be a sound effect when the director talks, even if it's just like Charlie Brown talking" | **Done.** The director "talks" in a muted-trumpet wah-wah, one syllable for every couple of words, capped so long lines don't drone. |
+| "when you frequently put the light in the shot... it crowds the view. So maybe he should only say that if you put it there for like more than 10 seconds" | **Done.** Dee texts about a light in the shot only after it has sat there 10 seconds (it was 1.2), and only once per light per scene. The iPad tip still says it right away. |
+| "I did have to say allow immersive experiences on the web browser first, so we might want to point users to that before showing them the enter VR button" | **Done.** The start page says: "In the headset browser? If it asks to allow immersive mode, press Allow first." |
+| "it'd be nice if the director was a little closer to the scene" | **Done.** The director's chair moved in, right to the edge of the set (out of the shot and clear of the lights). The sponsor rep moved with him. |
+| "It is really dark and kind of hard to see the actual camera" | **Done.** The camera body is a lighter gunmetal, with a red tally light on top and a glowing monitor on the back. |
+| "a camera operator behind the camera" | **Open.** This needs a new character model, so it goes to the art pipeline (like the crew in PR #3). |
+| "the lighting in the dark shot where there was the one overhead light, the interrogation lighting, wasn't showing in the VR as it was in the monitor" | **Need more detail from ben.** In the headset emulator, the top light shows on the set the same as on the iPad. One real difference: the iPad's shots skip the scene's film-style color curve (three.js leaves it off when rendering to a texture). Side by side, that only changes the look slightly. A Quest screenshot (Meta button + trigger) or a description would pin it down: no light at all, a flat look, or a hard-to-see angle from above. |
+
 ## Round 5: 2026-11-01 (ben, desktop browser)
 
 | ben said | Status |

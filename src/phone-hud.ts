@@ -47,6 +47,8 @@ export class PhoneHud {
   private hiddenAbove = false;
   /** 1 right after a message lands, easing to 0; the system uses it to bounce the phone. */
   pop = 0;
+  /** Called when a text or banner lands (the system plays a chime and buzzes the controllers). */
+  onArrive?: () => void;
   /** Every message shown so far, for tests. */
   readonly log: Text[] = [];
 
@@ -59,7 +61,9 @@ export class PhoneHud {
       new PlaneGeometry(PHONE_WIDTH, PHONE_HEIGHT),
       new MeshBasicMaterial({ map: this.texture, transparent: true, toneMapped: false, depthTest: false, depthWrite: false }),
     );
-    this.mesh.renderOrder = 1001;
+    this.mesh.renderOrder = 1003;
+    // Over the iPad when they overlap, and a ray that crosses it presses it, not the set behind.
+    (this.mesh as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
     this.mesh.frustumCulled = false;
     this.mesh.name = 'phone-hud';
     this.mesh.visible = false;
@@ -140,6 +144,7 @@ export class PhoneHud {
       this.bannerTime = 0;
       this.sinceLast = 0;
       this.pop = 1;
+      this.onArrive?.();
       this.mesh.visible = true;
       this.draw(false);
       return;
@@ -160,6 +165,7 @@ export class PhoneHud {
       this.scrollBack = 0;
       this.typing = 0;
       this.pop = 1;
+      this.onArrive?.();
       this.sinceLast = 0;
       this.draw(false);
     }

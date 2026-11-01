@@ -24,10 +24,12 @@ function spot(x: number, z: number): { position: [number, number, number]; rotY:
 
 /** Stage-local spot and facing (radians about Y) of each crew member. */
 export const CREW_ANCHORS: Record<CrewRole, { position: [number, number, number]; rotY: number }> = {
-  // Front-left, in his director's chair beside the camera.
-  director: spot(-0.29, 0.22),
+  // Front-left, in his director's chair beside the camera, right at the edge
+  // of the set (moved in after the first headset playtest: "he should just be a
+  // little closer").
+  director: spot(-0.265, 0.17),
   // The sponsor rep hovers right behind the director.
-  sponsor: spot(-0.31, 0.32),
+  sponsor: spot(-0.29, 0.27),
   // The real gaffer, front-right, watching you work.
   gaffer: spot(0.29, 0.23),
   // Craft services, front-right corner behind her table.

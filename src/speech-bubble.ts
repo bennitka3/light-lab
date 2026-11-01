@@ -19,6 +19,8 @@ export class SpeechBubble {
   private material: MeshBasicMaterial;
   private remaining = 0;
   private queue: { speaker: string; line: string; hold: boolean }[] = [];
+  /** Called as each line goes up (the system plays the speaker's voice). */
+  onShow?: (speaker: string, line: string) => void;
   /** The last line said, for tests. */
   line = '';
 
@@ -61,6 +63,7 @@ export class SpeechBubble {
 
   private show(speaker: string, line: string, hold: boolean): void {
     this.line = line;
+    this.onShow?.(speaker, line);
     const words = line.split(' ').length;
     this.remaining = hold ? Infinity : Math.max(4, words / 3 + 1.5);
     const ctx = this.canvas.getContext('2d');
