@@ -219,6 +219,47 @@ const { chromium } = require('playwright');
   await page.screenshot({ path: `${out}/12-scene4-dial-warm.png` });
   check('dialing back to 3200K wins scene 4', (await api((i) => window.lightLab.kelvin(i), dialIdx)) === 3200 && warm.phase === 'won', warm);
 
+  // Round 5. The director turns to look at you before his win line.
+  await api(() => window.lightLab.loadLevel(0));
+  await wait(1500);
+  const turn0 = await api(() => window.lightLab.directorTurn());
+  await api(() => window.lightLab.solve());
+  await wait(4000);
+  const turn1 = await api(() => window.lightLab.directorTurn());
+  const line1 = await api(() => window.lightLab.bubble());
+  await page.screenshot({ path: `${out}/13-director-looks.png` });
+  check('director turns to you and says "stick around" on the scene 1 win', Math.abs(turn0 || 0) < 0.05 && Math.abs(turn1 || 0) > 0.3 && /Stick around/.test(line1 || ''), { turn0, turn1, line1 });
+  const t5 = await api(() => window.lightLab.texts());
+  check('Dee no longer relays the director', !t5.some((t) => /squinted/.test(t)));
+  check('the iPad tip is quiet on a win', (await api(() => window.lightLab.card())).body === '');
+
+  // Round 5. House-light hints: "turn them off!" until cut once; after that, leaving them on is on purpose.
+  await api(() => window.lightLab.loadLevel(0));
+  await wait(500);
+  const hh1 = (await state()).hint;
+  const house = await at('light:0');
+  await page.mouse.click(house.x, house.y);
+  await wait(300);
+  await page.mouse.click(house.x, house.y);
+  await wait(500);
+  const hh2 = (await state()).hint;
+  check('house hint says "Turn them off!", then goes quiet once you have cut them', /Turn them off!/.test(hh1) && !/house/i.test(hh2) && (await api(() => window.lightLab.houseOn())), { hh1, hh2 });
+
+  // Round 5. Dee's chat scrolls back: mouse wheel over the phone.
+  for (let k = 0; k < 6; k++) await api((n) => window.lightLab.dee(`test text number ${n}, long enough to wrap onto a second line`), k);
+  await wait(9000);
+  const phoneAt = await at('phone');
+  await page.mouse.click(phoneAt.x, 712);
+  await wait(1500);
+  const ph2 = await at('phone');
+  await page.mouse.move(ph2.x, ph2.y);
+  await page.mouse.wheel(0, -400);
+  await wait(500);
+  const back = await api(() => window.lightLab.phoneScrolledBack());
+  await page.screenshot({ path: `${out}/14-phone-scrolled.png` });
+  check('scrolling over the phone shows older texts', back > 0, { back });
+  await page.mouse.move(5, 5);
+
   console.log('errors', errors.length ? errors : 'none');
   const failed = Object.entries(results).filter(([, ok]) => !ok);
   await browser.close();

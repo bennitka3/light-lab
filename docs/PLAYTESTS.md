@@ -3,6 +3,21 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 5: 2026-11-01 (ben, desktop browser)
+
+| ben said | Status |
+|---|---|
+| "why would Dee text me this ['the director just squinted at you and said stick around']... this should be said by the director after he physically looks at me, maybe in replacement of [Don't touch anything. Ever again.]" | **Done.** On every win the director turns in his chair to look at you, takes a beat, then speaks. In scene 1 he says "...Hm. You. Stick around." Dee now texts "did the director just TALK to you??". "Don't touch anything. Ever again." is replaced by "Perfect. Lock it off. Nobody breathe." |
+| "the professor line is weird because no one looks like a professor... he should be dressed more like a professor" | **Done.** The art thread made a professor (gray hair, blazer, glasses; PR #7). Scene 2 seats him whenever the model is there. |
+| "we should still be able to scroll to Dee's last messages above in the chat" | **Done.** Scroll the mouse wheel over the phone, or tap "▲ earlier" / "▼ newest" (works with the headset ray too). The phone keeps the last 40 texts. |
+| "we should be able to SEE the physical house lights hanging somewhere" | **Done.** Six industrial dome lights hang from the grid, above the shot. They glow while the house lights are on. |
+| "the little note when you win at the bottom is distracting... that text below the ipad is just for quick tips" | **Done.** On a win the tip line is empty; only the Next scene button stays. |
+| "instead of 'Tap HOUSE' say 'turn them off!'... after he's given you this note once or twice... 'psst... house lights...' (but only if you're a decent time into the level and haven't turned them off once yet. if you've already cycled them assume it's on purpose)" | **Done.** The tip says "Turn them off!" for the first two reminders, then "Don't forget to cut the house lights." Dee texts about it only after 20 s in a scene, and only if you haven't cut them yet. Her first text is "turn them off!", later ones "psst... house lights...". Once you've turned them off in a scene, leaving them on is treated as on purpose. The tip moves on, and only says "Cut the house lights when you want to roll" once everything else is right. The take still can't win with them on. |
+
+### Backlog: difficulty modes (post-competition, or if there's time)
+
+- ben, 2026-11-01: "we should also only have [tips] for 'No experience' mode. when we build different difficulties, with some other difficulty settings that remove those tips, add things like real cable physics with the lights getting tangled/stuck on each other, and requiring cable management, etc."
+
 ## Round 4: 2026-11-01 (ben, desktop browser)
 
 Decision from ben: **every light switch lives on the iPad.** "all the light buttons should be labeled on your monitor, then we don't need labels over the lights because you can switch it on to find out." No labels float over lights any more.

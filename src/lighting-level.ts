@@ -3,6 +3,7 @@ import {
   BoxGeometry,
   CanvasTexture,
   Color,
+  CylinderGeometry,
   createSystem,
   DirectionalLight,
   DistanceGrabbable,
@@ -107,6 +108,8 @@ const HANG_HEIGHT = 0.17;
 // a hint must stay the same before Dee texts it as a nudge.
 const IN_FRAME_TEXT_SECONDS = 1.2;
 const NUDGE_SECONDS = 14;
+/** Dee only mentions the house lights once the player is this far into a scene. */
+const HOUSE_NUDGE_SECONDS = 20;
 // Where the lower third and the phone ride in front of the headset view (meters, head space).
 const HUD_IPAD_OFFSET = new Vector3(0, -0.21, -0.6);
 const HUD_IPAD_FULL_OFFSET = new Vector3(0, -0.04, -0.55);
@@ -285,6 +288,8 @@ export class LightingLevelSystem extends createSystem({
   // light count, which makes three.js recompile every material (a visible stall).
   private houseLights: (HemisphereLight | DirectionalLight)[] = [];
   private houseIntensity: number[] = [];
+  /** The glowing undersides of the house light fixtures hanging from the grid. */
+  private houseBulb?: MeshStandardMaterial;
   private switches: Switch[] = [];
 
   // Camera shots and the monitor.
@@ -301,7 +306,6 @@ export class LightingLevelSystem extends createSystem({
 
   // The lower third, the phone, and the hover label.
   private ipadEntity!: Entity;
-  private phonePressed = false;
   private phoneEntity!: Entity;
   private bubble = new SpeechBubble();
   private director?: { anchor: Object3D; placeholder?: Object3D };
@@ -321,6 +325,18 @@ export class LightingLevelSystem extends createSystem({
   private canEnterXR = false;
   private mouseHover: Fixture | null = null;
   private lastDirectorLine = -1;
+  // The director turning to look at you before a line.
+  private directorModel?: Object3D;
+  private directorYaw = 0;
+  private directorLooking = false;
+  private directorBlend = 0;
+  private pendingLine: { line: string; hold: boolean; wait: number } | null = null;
+  private phoneWheel = 0;
+  // House lights: has the player cut them this scene (then leaving them on is on purpose),
+  // how long the scene has run, and how often Dee has mentioned them all game.
+  private houseEverOff = false;
+  private sceneTime = 0;
+  private houseTexts = 0;
 
   // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
   private inFrameTime = 0;
@@ -555,6 +571,10 @@ export class LightingLevelSystem extends createSystem({
           zoom: () => this.ipadZoom,
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
+          phoneScrolledBack: () => this.phone.scrolledBack,
+          dee: (text: string) => this.phone.text('dee', text),
+          // How far (radians) the director has turned from his resting pose, e.g. to look at you.
+          directorTurn: () => (this.directorModel ? this.directorModel.rotation.y - this.directorYaw : null),
           enterXR: () => this.world.launchXR(),
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -610,7 +630,10 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
+    this.directorLooking = false;
     this.houseOn = this.level.houseStartsOn ?? true;
+    this.houseEverOff = !this.houseOn;
+    this.sceneTime = 0;
     this.holdTime = 0;
     this.inFrameTime = 0;
     this.inFrameTexted = false;
@@ -635,13 +658,21 @@ export class LightingLevelSystem extends createSystem({
         this.actor.position.set(...first.pos);
         this.actor.rotation.set(0, first.rotY ?? 0, 0);
       }
-      // The second seat goes to the actress (asset "actress", once loaded), else a copy of the actor.
-      let actress: Object3D | undefined;
-      try {
-        actress = AssetManager.getGLTF('actress')?.scene;
-      } catch {
-        actress = undefined;
+      // Some scenes cast someone else in the first seat (the professor in scene 2),
+      // once the art pass has added that model; until then the usual actor sits in.
+      const stand = level.actorAsset ? this.loadedModel(level.actorAsset) : undefined;
+      if (first && stand) {
+        const clone = stand.clone(true);
+        clone.scale.copy(this.actor.scale);
+        clone.position.set(...first.pos);
+        clone.rotation.set(0, first.rotY ?? 0, 0);
+        clone.visible = true;
+        this.actor.visible = false;
+        this.stage.add(clone);
+        this.extraActors.push(clone);
       }
+      // The second seat goes to the actress (asset "actress", once loaded), else a copy of the actor.
+      const actress = this.loadedModel('actress');
       for (const extra of level.actors.slice(1)) {
         const clone = (actress ?? this.actor).clone(true);
         if (actress) clone.scale.copy(this.actor.scale);
@@ -711,6 +742,15 @@ export class LightingLevelSystem extends createSystem({
     }
 
     this.showBriefCard();
+  }
+
+  /** A model from the asset manifest if it is listed and loaded, else undefined. */
+  private loadedModel(key: string): Object3D | undefined {
+    try {
+      return AssetManager.getGLTF(key)?.scene;
+    } catch {
+      return undefined;
+    }
   }
 
   private unloadLevel(): void {
@@ -858,7 +898,42 @@ export class LightingLevelSystem extends createSystem({
   /** The director says a line from beside the set. */
   private say(line: string, hold = false): void {
     devLog(`director says ${line}`);
+    this.pendingLine = null;
     this.bubble.say('Director', line, hold);
+  }
+
+  /** The director turns to look at you, takes a beat, then says the line. */
+  private sayToYou(line: string, hold = false): void {
+    this.directorLooking = true;
+    this.bubble.hide();
+    this.pendingLine = { line, hold, wait: 0.9 };
+  }
+
+  /**
+   * Turns the director's model (chair and all) toward the player while he is
+   * looking at you, and back to the set otherwise; plays a line waiting on that turn.
+   */
+  private updateDirector(delta: number): void {
+    if (this.pendingLine) {
+      this.pendingLine.wait -= delta;
+      if (this.pendingLine.wait <= 0) {
+        const { line, hold } = this.pendingLine;
+        this.say(line, hold);
+      }
+    }
+    if (!this.directorModel) {
+      this.directorModel = this.world.getSceneObject('crew-director-model') ?? this.stage.getObjectByName('crew-director-model') ?? undefined;
+      if (!this.directorModel) return;
+      this.directorYaw = this.directorModel.rotation.y;
+    }
+    const model = this.directorModel;
+    this.directorBlend += ((this.directorLooking ? 1 : 0) - this.directorBlend) * (1 - Math.exp(-delta * 4));
+    this.world.camera.getWorldPosition(this.v1);
+    model.parent?.worldToLocal(this.v1);
+    let turn = Math.atan2(this.v1.x - model.position.x, this.v1.z - model.position.z) - this.directorYaw;
+    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+    turn = MathUtils.clamp(turn, -1.3, 1.3);
+    model.rotation.y = this.directorYaw + turn * this.directorBlend;
   }
 
   /** The director's next line, after the one he is saying. */
@@ -915,7 +990,7 @@ export class LightingLevelSystem extends createSystem({
     if (this.level.after) {
       this.phone.text('dee', this.level.after);
     }
-    this.say(last ? '"Okay. Okay. Everybody quiet. Roll it."' : this.pickDirectorLine(), true);
+    this.sayToYou(last ? '"Okay. Okay. Everybody quiet. Roll it."' : (this.level.directorWin ?? this.pickDirectorLine()), true);
   }
 
   private rollFinale(): void {
@@ -936,7 +1011,7 @@ export class LightingLevelSystem extends createSystem({
     this.phone.text('dee', 'THE GREEN SCREEN IS LAKE COMO NOW and the light on their faces matches 😭😭');
     this.showPage({
       eyebrow: 'Rolling',
-      body: "Rolling. That's Lake Como.",
+      body: '',
       button: 'Take a bow',
     });
   }
@@ -999,11 +1074,6 @@ export class LightingLevelSystem extends createSystem({
       sw.pressed = pressed;
     }
     // The iPad's own controls are handled by its pointer listener (it needs the hit point).
-    const phonePressed = this.immersive && this.phoneEntity.hasComponent(Pressed);
-    if (phonePressed && !this.phonePressed) {
-      this.phone.togglePin();
-    }
-    this.phonePressed = phonePressed;
 
     this.setHouseLights(this.houseOn);
     if (this.practical) {
@@ -1016,6 +1086,7 @@ export class LightingLevelSystem extends createSystem({
     this.houseLights.forEach((light, i) => {
       light.intensity = on ? this.houseIntensity[i] : 0;
     });
+    if (this.houseBulb) this.houseBulb.emissiveIntensity = on ? 2.2 : 0.02;
   }
 
   private resetHold(): void {
@@ -1030,6 +1101,7 @@ export class LightingLevelSystem extends createSystem({
 
   private toggleHouse(): void {
     this.houseOn = !this.houseOn;
+    if (!this.houseOn) this.houseEverOff = true;
     devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
     this.resetHold();
   }
@@ -1381,9 +1453,17 @@ export class LightingLevelSystem extends createSystem({
         hint: `The ${itemName(framed.item)} is in the shot! Move it out of frame.`,
       };
     }
-    if (this.houseOn) {
-      return { score: Math.min(score, 45), hint: 'The house lights flatten everything. Tap HOUSE on the iPad.' };
+    // House lights on: say so until the player has cut them once this scene;
+    // after that, leaving them on is on purpose (to see the set), so only
+    // mention them once everything else is right. Either way they block the take.
+    const houseCap = this.houseOn ? 45 : 100;
+    if (this.houseOn && !this.houseEverOff) {
+      return {
+        score: Math.min(score, houseCap),
+        hint: this.houseTexts < 2 ? 'The house lights flatten everything. Turn them off!' : "Don't forget to cut the house lights.",
+      };
     }
+    score = Math.min(score, houseCap);
     if (level.practical && !this.practical?.on) {
       return { score: Math.min(score, 60), hint: 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
@@ -1415,6 +1495,9 @@ export class LightingLevelSystem extends createSystem({
       return { score, hint: `Too many lights: switch off the ${itemName(extras[0].item)}.` };
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
+    if (this.houseOn && worst.fit > 0.85) {
+      return { score, hint: 'Looks right. Cut the house lights when you want to roll.' };
+    }
     return { score, hint: this.placeHint(worst.role, worst.fixture!) };
   }
 
@@ -1559,6 +1642,22 @@ export class LightingLevelSystem extends createSystem({
       this.inFrameTexted = false;
     }
     this.sinceNudge += delta;
+    this.sceneTime += delta;
+    if (this.houseOn && !this.houseEverOff && /house lights/.test(hint)) {
+      // Only once the player is a while into the scene and still hasn't cut them.
+      if (this.sceneTime > HOUSE_NUDGE_SECONDS && this.sinceNudge > NUDGE_SECONDS && this.lastNudge !== `house:${this.levelIndex}`) {
+        this.lastNudge = `house:${this.levelIndex}`;
+        this.sinceNudge = 0;
+        const text =
+          this.houseTexts === 0
+            ? 'the house lights are flattening everything. turn them off!'
+            : ['psst... house lights...', "don't forget to cut the house lights 👀"][this.houseTexts % 2];
+        this.houseTexts += 1;
+        this.phone.text('dee', text);
+      }
+      this.lastHint = hint;
+      return;
+    }
     if (hint !== this.lastHint) {
       this.lastHint = hint;
       this.hintSince = 0;
@@ -1626,6 +1725,16 @@ export class LightingLevelSystem extends createSystem({
     this.showPage(this.ipad.page);
     this.phoneEntity = this.world.createTransformEntity(this.phone.mesh);
     this.phoneEntity.addComponent(RayInteractable);
+    // In the headset, a ray press on the phone scrolls (its buttons) or keeps it up / tucks it.
+    const onPhoneDown = (event: { point?: Vector3 }) => {
+      if (!this.immersive || !event.point) return;
+      const local = this.phone.mesh.worldToLocal(this.v4.copy(event.point));
+      this.phone.pressAt(local.x, local.y);
+    };
+    (this.phone.mesh as unknown as { addEventListener: (type: string, fn: (event: { point?: Vector3 }) => void) => void }).addEventListener(
+      'pointerdown',
+      onPhoneDown,
+    );
     this.world.scene.add(this.bubble.mesh);
     this.buildDirector();
   }
@@ -1731,6 +1840,7 @@ export class LightingLevelSystem extends createSystem({
       this.bubble.mesh.position.y += 0.14 + BUBBLE_HEIGHT / 2;
       camera.getWorldQuaternion(this.bubble.mesh.quaternion);
     }
+    this.updateDirector(delta);
     this.bubble.update(delta);
   }
 
@@ -1766,7 +1876,37 @@ export class LightingLevelSystem extends createSystem({
     this.houseLights = [fill, top];
     this.houseIntensity = [fill.intensity, top.intensity];
 
-    // Its switch is HOUSE on the iPad's light row.
+    // The fixtures themselves: industrial dome lights hanging from the grid, up
+    // out of the shot, glowing while the house lights are on. Its switch is
+    // HOUSE on the iPad's light row.
+    const shadeMaterial = new MeshStandardMaterial({ color: '#3b3d42', roughness: 0.45, metalness: 0.6 });
+    const cableMaterial = new MeshStandardMaterial({ color: '#111113', roughness: 0.8 });
+    this.houseBulb = new MeshStandardMaterial({ color: '#fff6e6', emissive: '#fff3dd', emissiveIntensity: 2.2 });
+    const shadeGeometry = new CylinderGeometry(0.006, 0.02, 0.014, 20, 1, true);
+    const capGeometry = new CylinderGeometry(0.006, 0.006, 0.006, 12);
+    const bulbGeometry = new CylinderGeometry(0.017, 0.017, 0.002, 20);
+    const cableGeometry = new CylinderGeometry(0.0008, 0.0008, 0.024, 6);
+    const houseRig = new Group();
+    houseRig.name = 'house-fixtures';
+    for (const x of [-0.16, 0, 0.16]) {
+      for (const z of [-0.08, 0.12]) {
+        const lamp = new Group();
+        lamp.name = 'house-fixture';
+        const cable = new Mesh(cableGeometry, cableMaterial);
+        cable.position.y = 0.012;
+        const cap = new Mesh(capGeometry, shadeMaterial);
+        cap.position.y = 0.003;
+        const shade = new Mesh(shadeGeometry, shadeMaterial);
+        shade.material.side = 2; // both sides, so the open shade reads from below
+        shade.position.y = -0.007;
+        const bulb = new Mesh(bulbGeometry, this.houseBulb);
+        bulb.position.y = -0.012;
+        lamp.add(cable, cap, shade, bulb);
+        lamp.position.set(x, STAGE_HEIGHT - 0.024, z);
+        houseRig.add(lamp);
+      }
+    }
+    this.stage.add(houseRig);
   }
 
   // --- Test helper -------------------------------------------------------------
@@ -1862,9 +2002,13 @@ export class LightingLevelSystem extends createSystem({
       const control = this.ipad.controlAt(cardLocal.x, cardLocal.y);
       // A press on the iPad that misses every control does nothing (it doesn't turn the view).
       press = () => this.pressIpad(control);
-    } else if (this.raycaster.intersectObject(this.phone.mesh, false).length > 0) {
-      fixtureHit = null;
-      press = () => this.phone.togglePin();
+    } else {
+      const phoneHit = this.raycaster.intersectObject(this.phone.mesh, false)[0];
+      if (phoneHit) {
+        fixtureHit = null;
+        const local = this.phone.mesh.worldToLocal(phoneHit.point.clone());
+        press = () => this.phone.pressAt(local.x, local.y);
+      }
     }
 
     if (press) {
@@ -1954,6 +2098,17 @@ export class LightingLevelSystem extends createSystem({
       return;
     }
     event.preventDefault();
+    // Scrolling over the phone scrolls Dee's chat back through older texts.
+    this.setPointerRay(event.clientX, event.clientY);
+    if (!this.dragged && this.raycaster.intersectObject(this.phone.mesh, false).length > 0) {
+      // Trackpads send many small steps: one message per ~80 pixels of scroll.
+      this.phoneWheel += event.deltaY;
+      while (Math.abs(this.phoneWheel) >= 80) {
+        this.phone.scroll(this.phoneWheel < 0 ? 1 : -1);
+        this.phoneWheel -= Math.sign(this.phoneWheel) * 80;
+      }
+      return;
+    }
     if (this.dragged) {
       // Raise or lower the held light, and keep dragging at its new height.
       this.dragged.local.y = MathUtils.clamp(this.dragged.local.y - event.deltaY * 0.00015, MIN_HEIGHT, MAX_HEIGHT);

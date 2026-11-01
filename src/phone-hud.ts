@@ -20,6 +20,9 @@ const BANNER_SECONDS = 5;
 const PX_W = 500;
 const PX_H = Math.round((PX_W * PHONE_HEIGHT) / PHONE_WIDTH);
 const TYPING_SECONDS = 1.1;
+/** Where the scroll buttons sit on the phone canvas (top of each pill, pixels). */
+const EARLIER_Y = 168;
+const NEWEST_Y = PX_H - 92;
 
 const CONTACTS: Record<Text['from'], { name: string; color: string }> = {
   dee: { name: 'Dee (video village)', color: '#a78bfa' },
@@ -38,6 +41,10 @@ export class PhoneHud {
   private sinceLast = Infinity;
   /** The player tapped the phone to keep it up. */
   pinned = false;
+  /** How many of the newest messages are scrolled off the bottom (0 = showing the latest). */
+  private scrollBack = 0;
+  /** Older messages are cut off above (so the "earlier" button shows). */
+  private hiddenAbove = false;
   /** 1 right after a message lands, easing to 0; the system uses it to bounce the phone. */
   pop = 0;
   /** Every message shown so far, for tests. */
@@ -65,6 +72,7 @@ export class PhoneHud {
 
   clear(): void {
     this.messages = [];
+    this.scrollBack = 0;
     this.queue = [];
     this.typing = 0;
     this.banner = undefined;
@@ -74,6 +82,38 @@ export class PhoneHud {
   togglePin(): void {
     this.pinned = !this.pinned;
     this.draw(this.typing > 0);
+  }
+
+  /** Scrolls the chat: +1 shows one older message, -1 one newer. */
+  scroll(step: number): void {
+    const next = Math.max(0, Math.min(this.messages.length - 1, this.scrollBack + step));
+    if (next === this.scrollBack || (step > 0 && !this.hiddenAbove)) return;
+    this.scrollBack = next;
+    this.draw(this.typing > 0);
+  }
+
+  /**
+   * A tap on the phone at a point in its own meters (origin at the center):
+   * the "earlier" and "newest" buttons scroll the chat, anywhere else keeps
+   * the phone up or tucks it away.
+   */
+  pressAt(x: number, y: number): void {
+    const py = (PHONE_HEIGHT / 2 - y) * (PX_H / PHONE_HEIGHT);
+    if (!this.awake) {
+      // Tucked away: any tap brings it up and keeps it there.
+      this.togglePin();
+    } else if (this.hiddenAbove && py > EARLIER_Y - 30 && py < EARLIER_Y + 50) {
+      this.scroll(1);
+    } else if (this.scrollBack > 0 && py > NEWEST_Y - 30 && py < NEWEST_Y + 50) {
+      this.scroll(-this.scrollBack);
+    } else {
+      this.togglePin();
+    }
+    void x;
+  }
+
+  get scrolledBack(): number {
+    return this.scrollBack;
   }
 
   get awake(): boolean {
@@ -114,9 +154,10 @@ export class PhoneHud {
       const next = this.queue.shift()!;
       this.messages.push(next);
       this.log.push(next);
-      if (this.messages.length > 12) {
+      if (this.messages.length > 40) {
         this.messages.shift();
       }
+      this.scrollBack = 0;
       this.typing = 0;
       this.pop = 1;
       this.sinceLast = 0;
@@ -163,11 +204,12 @@ export class PhoneHud {
     // Bubbles, newest at the bottom; older ones scroll off the top.
     const maxBubble = PX_W - 70;
     const lineH = 48;
-    const bottom = PX_H - 50;
-    const top = 172;
+    const scrolled = this.scrollBack > 0;
+    const bottom = scrolled ? NEWEST_Y - 14 : PX_H - 50;
+    const top = EARLIER_Y + 56;
     ctx.font = '40px system-ui, sans-serif';
     let y = bottom;
-    if (typing) {
+    if (typing && !scrolled) {
       // The "..." typing bubble.
       roundRect(ctx, 34, y - 58, 110, 58, 29);
       ctx.fillStyle = '#2c2c2e';
@@ -180,12 +222,14 @@ export class PhoneHud {
       }
       y -= 58 + 18;
     }
-    for (let i = this.messages.length - 1; i >= 0; i--) {
+    this.hiddenAbove = false;
+    for (let i = this.messages.length - 1 - this.scrollBack; i >= 0; i--) {
       const message = this.messages[i];
       const lines = wrap(ctx, message.text, maxBubble - 44);
       const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 44);
       const height = lines.length * lineH + 30;
       if (y - height < top) {
+        this.hiddenAbove = true;
         break;
       }
       roundRect(ctx, 34, y - height, width, height, 26);
@@ -195,6 +239,24 @@ export class PhoneHud {
       lines.forEach((line, j) => ctx.fillText(line, 56, y - height + 52 + j * lineH));
       y -= height + 14;
     }
+    // Scroll buttons: older texts above, and a way back to the newest.
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    if (this.hiddenAbove) {
+      roundRect(ctx, PX_W / 2 - 110, EARLIER_Y, 220, 46, 23);
+      ctx.fillStyle = '#3a3a40';
+      ctx.fill();
+      ctx.fillStyle = '#e4e4e7';
+      ctx.fillText('▲ earlier', PX_W / 2, EARLIER_Y + 32);
+    }
+    if (scrolled) {
+      roundRect(ctx, PX_W / 2 - 110, NEWEST_Y, 220, 46, 23);
+      ctx.fillStyle = '#a78bfa';
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.fillText('▼ newest', PX_W / 2, NEWEST_Y + 32);
+    }
+    ctx.textAlign = 'left';
     if (this.banner) {
       // A notification banner from another chat, dropped over the top of the screen.
       const from = CONTACTS[this.banner.from];
