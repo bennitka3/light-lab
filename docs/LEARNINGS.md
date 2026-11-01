@@ -2,6 +2,20 @@
 
 Notes for whoever (human or Claude) works on this next. Newest first.
 
+## 2026-11-01: playtest round 5
+
+**Characters say things to your face, not through Dee.** When a line is the
+director reacting to you, he says it himself and turns to look at you first
+(`sayToYou`: turn, 0.9 s beat, line). Dee only texts what she would know
+from video village.
+
+**Swappable cast per scene.** `LevelDef.actorAsset` names a model for the
+first seat; `loadedModel()` returns it only if it is in the manifest and
+loaded, so the art and the code can land in either order.
+
+**Don't nag about choices.** A reminder stops once the player has shown they
+know (cut the house lights once = leaving them on is deliberate).
+
 ## 2026-11-01: playtest round 4, switches on the iPad
 
 **All switches are buttons on the iPad, labeled.** HOUSE, every light and

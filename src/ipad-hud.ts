@@ -322,7 +322,8 @@ export class IPad {
     const textW = barW - (page.button ? m(SMALL_BUTTON.w + 0.01) : 0);
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${m(0.0112)}px system-ui, sans-serif`;
-    const headline = page.body || (this.won ? "CUT! That's the shot." : this.hint);
+    // A won take leaves the tip line empty: the director and Dee do the talking.
+    const headline = page.body || (this.won ? '' : this.hint);
     // Long tips shrink to fit on the one line rather than getting cut off.
     let tipSize = 0.0112;
     while (ctx.measureText(headline).width > textW && tipSize > 0.0084) {

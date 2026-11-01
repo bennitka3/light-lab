@@ -55,6 +55,10 @@ export type LevelDef = {
   set: SetId;
   /** Actor seat positions (stage-local floor points) and turn. Empty = no cast. */
   actors: { pos: [number, number, number]; rotY?: number }[];
+  /** A different model for the first seat (asset key), used once it exists; else the usual actor. */
+  actorAsset?: string;
+  /** What the director says on the win in this scene, instead of a random line. */
+  directorWin?: string;
   /** Show the tall director's chair from the base set under the first actor. */
   directorsChair: boolean;
   /** Where lights aim and the camera looks. Defaults to the cast's head height. */
@@ -106,14 +110,16 @@ export const LEVELS: LevelDef[] = [
     quote: '"You! Lighting! Make the talent look good."',
     objective: 'Kill the house lights. Then one soft key: 45° to the side, a bit above the eyes.',
     lesson: 'Soft key, 45° to the side, a little above the eyes. Flattering on anyone.',
-    after: 'the director just squinted at you and said "stick around" 👀',
-    tip: 'Big square softbox = your key. Tap HOUSE on the iPad first, then put it front-left of him, a little above his eyes.',
+    directorWin: '"...Hm. You. Stick around."',
+    after: 'did the director just TALK to you?? he never talks to anyone 👀',
+    tip: 'Big square softbox = your key. Kill the house lights first (HOUSE on the iPad), then put it front-left of him, a little above his eyes.',
   },
   {
     id: 'interview',
     title: 'Interview (on location)',
     set: 'study',
     actors: [{ pos: [0, 0, -0.06], rotY: -0.35 }],
+    actorAsset: 'professor',
     directorsChair: false,
     camera: { x: 0.03, z: 0.14, fov: 26 },
     kit: [{ kind: 'softbox' }, { kind: 'panel' }, { kind: 'fresnel' }],
@@ -337,7 +343,7 @@ export const DIRECTOR_WINS = [
   '"Checking the gate... we\'re good. Moving on!"',
   '"Now THAT is cinema."',
   '"I\'m getting chills. Are you getting chills?"',
-  '"Perfect. Don\'t touch anything. Ever again."',
+  '"Perfect. Lock it off. Nobody breathe."',
   '"Did you go to film school? Don\'t answer. I don\'t care."',
   '"That\'s a keeper. Next setup!"',
   '"The light! The LIGHT! Okay, moving on."',
