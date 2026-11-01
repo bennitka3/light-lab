@@ -34,6 +34,7 @@ import {
   WebGLRenderTarget,
 } from '@iwsdk/core';
 import { CreatureFeature } from './creature-feature.js';
+import { OPERATOR_ASSET, attachCameraOperator } from './camera-operator.js';
 import { LightingStage, StageLight } from './lighting-components.js';
 import { DEE_WINS, DIRECTOR_WINS, type KitItem, type LevelDef, LEVELS, type Role } from './levels.js';
 import { PHONE_HEIGHT, PHONE_WIDTH, PhoneHud } from './phone-hud.js';
@@ -348,6 +349,8 @@ export class LightingLevelSystem extends createSystem({
   /** The scene's own cast member hasn't loaded yet (the stand-in actor is sitting in). */
   private castPending = false;
   private retakeTarget = false;
+  /** The camera operator's model hasn't loaded yet (he joins the camera rig once it has). */
+  private operatorPending = true;
   // House lights: has the player cut them this scene (then leaving them on is on purpose),
   // how long the scene has run, and how often Dee has mentioned them all game.
   private houseEverOff = false;
@@ -493,6 +496,7 @@ export class LightingLevelSystem extends createSystem({
         this.renderShot(this.shotTarget, true);
       }
       if (this.castPending && this.framesSinceLoad % 20 === 0) this.seatCastMember();
+      if (this.operatorPending && this.framesSinceLoad % 20 === 10) this.placeOperator();
       this.creature.update(delta);
       this.updateScore(delta);
       this.phone.update(delta);
@@ -600,6 +604,13 @@ export class LightingLevelSystem extends createSystem({
           dee: (text: string) => this.phone.text('dee', text),
           // How far (radians) the director has turned from his resting pose, e.g. to look at you.
           directorTurn: () => (this.directorModel ? this.directorModel.rotation.y - this.directorYaw : null),
+          // The camera operator's stage-local spot and the camera rig's, or null until his model loads.
+          operator: () => {
+            const op = this.cameraRig.getObjectByName('crew-operator-model');
+            if (!op) return null;
+            const at = this.stage.worldToLocal(op.getWorldPosition(new Vector3()));
+            return { at: at.toArray(), rig: this.cameraRig.position.toArray() };
+          },
           enterXR: () => this.world.launchXR(),
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -781,6 +792,15 @@ export class LightingLevelSystem extends createSystem({
     // Retake the director's target shot with him in it on the next frame.
     this.retakeTarget = true;
     devLog(`cast ${this.level.actorAsset} seated`);
+  }
+
+  /** Stands the camera operator behind the camera (on its rig) once his model has loaded. */
+  private placeOperator(): void {
+    const model = this.loadedModel(OPERATOR_ASSET);
+    if (!model) return;
+    this.operatorPending = false;
+    attachCameraOperator(this.cameraRig, model);
+    devLog('camera operator placed');
   }
 
   /** A model from the asset manifest if it is listed and loaded, else undefined. */

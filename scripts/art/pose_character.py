@@ -177,6 +177,21 @@ else:
         rot('R UpperArm', Z, 25)
         rot('R Forearm', Z, 70)
         rot('Head', Y, -4)
+    elif pose == 'operating':
+        # Camera operator: leaning in a little, both hands forward on the camera body at
+        # about lens height (1.4 m), head down toward the monitor on its back.
+        rot('Spine1', X, float(os.environ.get('OP_LEAN', 8)))
+        for side, sgn in (('L', 1), ('R', -1)):
+            # Elbows down and a little out, forearms up: hands land about 14 cm either side
+            # of center, 40 cm in front of the pelvis, at 1.38 m (the camera body's sides).
+            rot(f'{side} UpperArm', X, float(os.environ.get('OP_UA', -45)))
+            rot(f'{side} UpperArm', Z, sgn * float(os.environ.get('OP_UAZ', 12)))
+            rot(f'{side} Forearm', X, float(os.environ.get('OP_FA', -55)))
+            hand_twist(side, sgn, float(os.environ.get('OP_TWIST', -20)))
+            curl_fingers(side, 30)
+        rot('Head', X, float(os.environ.get('OP_HEAD', 12)))
+        rot('L Thigh', Z, 4)
+        rot('R Thigh', Z, -4)
     elif pose == 'standing-cup':
         # Right forearm up, holding a cup in front of the chest.
         rot('R UpperArm', X, -18)
@@ -209,7 +224,7 @@ else:
     shift = Vector((-pel.x, -pel.y, -min(zs)))
 print('ANCHOR head', tuple(round(v, 3) for v in head_anchor + shift), 'pelvis', tuple(round(v, 3) for v in pelvis + shift),
       'min_z', round(min(zs) + shift.z, 3), 'max_z', round(max(zs) + shift.z, 3))
-if pose == 'dinner':
+if pose in ('dinner', 'operating'):
     print('ANCHOR elbows', tuple(round(v, 3) for v in bone_pos('L Forearm') + shift), 'hands', tuple(round(v, 3) for v in bone_pos('L Hand') + shift), tuple(round(v, 3) for v in bone_pos('R Hand') + shift))
 
 for o in list(bpy.data.objects):
