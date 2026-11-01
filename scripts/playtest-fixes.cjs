@@ -47,7 +47,8 @@ const { chromium } = require('playwright');
   await page.mouse.move(p.x, p.y);
   await wait(400);
   const hovered = await api(() => window.lightLab.hovered());
-  check('hovering a light shows its name', hovered === 'softbox', hovered);
+  const hoverText = await api(() => window.lightLab.hoverText());
+  check('hovering a light shows its name on the iPad', hovered === 'softbox' && /^Softbox/.test(hoverText || ''), { hovered, hoverText });
   await page.screenshot({ path: `${out}/03-hover.png` });
   await page.mouse.move(5, 5);
 

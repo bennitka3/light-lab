@@ -3,6 +3,28 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 3: 2026-11-01 (ben, desktop browser)
+
+Rule from ben: **"everything is practical UI."** Nothing floats on its own. Anything on screen is a prop you hold (iPad, phone) or comes from a character on set.
+
+| ben said | Status |
+|---|---|
+| "this should take up less space on screen. just the two shots at the bottom + the tip. the detailed notes below are either dialogue by characters or texts you receive" | **Done 2026-11-01.** During play the iPad is a slim strip: target, your shot, a match bar and one tip line. The scene brief and objective come from the director's speech bubble. The lesson and the gossip after a win arrive as texts from Dee. |
+| "this card should just be in the ipad ui" (the floating LUCKY BREAK / Play in your room panel) | **Done 2026-11-01.** The floating panel is gone. The iPad's start page has a "Play in VR" button when the device can do VR. Otherwise it says "On a Quest? Open this page there to play in VR." |
+| (follows from the rule) | Light names on hover now show on the iPad's tip line, in yellow, instead of a floating tag. The HOUSE switch moved out from under the director. |
+
+## Round 2: 2026-11-01 (ben, desktop browser)
+
+| ben said | Status |
+|---|---|
+| "the tips on this level were telling me to shift it toward camera right" / "swinging the backlight toward camera left puts it in the shot" | **Fixed.** Hints are now floor moves: camera-left/right, back/forward, "raise it until it hangs from the grid". There's no more "swing". |
+| "the note about the real guy came on for level 3" | **Fixed.** Dee's win texts never mention a person. Each scene's gossip is written for that scene. |
+| "when it switches to mom, you gotta just get a notification and see the preview" | **Done.** Mom arrives as a notification banner over the phone, not in the chat. |
+| "phone should stay close to the frame... a little bigger, and minimize when you're not getting a message or hovering" | **Done.** The phone sits next to the iPad, tucks down when idle and pops up for a text or on hover. |
+| "a little ipad you're holding center screen... only shows you your shot and the target... at the start that could say how to play, and be bigger until you say go" | **Done.** The iPad HUD replaced the monitor, the lower third and the how-to-play panel. |
+| "the dialogue... should just come from characters on the set. we should fill the set with crew characters" | **Done.** The director speaks in speech bubbles. Crew models came from the art thread (PR #3). |
+| "are the house lights taking a second to turn on intentional" | **Fixed.** That was a stall, not a choice. House lights now dim instead of being added and removed, so nothing recompiles. |
+
 ## Round 1: 2026-10-31 (ben, desktop browser, all seven scenes)
 
 | ben said | Status |

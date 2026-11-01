@@ -47,7 +47,7 @@ import {
   STAGE_HEIGHT,
   STAGE_WIDTH,
 } from './scene-assets/soundstage.scene-asset.js';
-import { IPAD_BUTTON_CENTER, IPAD_HEIGHT, IPAD_WIDTH, IPad, type IPadPage } from './ipad-hud.js';
+import { IPAD_COMPACT_HEIGHT, IPAD_HEIGHT, IPAD_WIDTH, IPad, type IPadPage } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
 
 /**
@@ -269,7 +269,9 @@ export class LightingLevelSystem extends createSystem({
   private hudY = 0;
   private phoneTuck = 0;
   private mouseOnPhone = false;
-  private hoverTag!: { mesh: Mesh; canvas: HTMLCanvasElement; texture: CanvasTexture; shown?: Fixture };
+  // The light the pointer is on; its name shows on the iPad's tip line.
+  private hovered?: Fixture;
+  private canEnterXR = false;
   private mouseHover: Fixture | null = null;
   private lastDirectorLine = -1;
 
@@ -310,9 +312,22 @@ export class LightingLevelSystem extends createSystem({
   private hudTarget = new Vector3();
 
   init(): void {
+    // Can this browser start a headset session? Decides the iPad's "Play in VR" button.
+    const xr = navigator.xr;
+    if (xr && this.world.xrEnabled) {
+      Promise.all([
+        xr.isSessionSupported('immersive-ar').catch(() => false),
+        xr.isSessionSupported('immersive-vr').catch(() => false),
+      ]).then(([ar, vr]) => {
+        this.canEnterXR = ar || vr;
+        if (this.ready && this.phase === 'title') this.showTitleCard();
+      });
+    }
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((state) => {
+        const wasImmersive = this.immersive;
         this.immersive = state !== VisibilityState.NonImmersive;
+        if (this.ready && this.phase === 'title' && wasImmersive !== this.immersive) this.showTitleCard();
         this.dragged = null;
         this.orbiting = false;
         // A dark studio backdrop in the browser; in the headset the real room shows through.
@@ -355,7 +370,6 @@ export class LightingLevelSystem extends createSystem({
       this.phoneEntity?.dispose();
       this.bubble.mesh.removeFromParent();
       this.director?.placeholder?.removeFromParent();
-      this.hoverTag?.mesh.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
     });
@@ -487,7 +501,8 @@ export class LightingLevelSystem extends createSystem({
           switchOn: (i: number, on = true) => {
             this.fixtures[i].on = on;
           },
-          hovered: () => this.hoverTag.shown?.item.kind ?? null,
+          hovered: () => this.hovered?.item.kind ?? null,
+          hoverText: () => this.ipad.hoverText,
           enterXR: () => this.world.launchXR(),
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -501,7 +516,7 @@ export class LightingLevelSystem extends createSystem({
           screenOf: (what: string | number) => {
             const v = new Vector3();
             if (what === 'card' || what === 'card-button') {
-              v.set(what === 'card' ? 0 : IPAD_BUTTON_CENTER.x, what === 'card' ? 0 : IPAD_BUTTON_CENTER.y, 0);
+              v.set(what === 'card' ? 0 : this.ipad.buttonCenter.x, what === 'card' ? 0 : this.ipad.buttonCenter.y, 0);
               this.ipad.object.localToWorld(v);
             } else if (what === 'phone') {
               this.phone.mesh.getWorldPosition(v);
@@ -785,6 +800,11 @@ export class LightingLevelSystem extends createSystem({
     this.bubble.say('Director', line, hold);
   }
 
+  /** The director's next line, after the one he is saying. */
+  private sayNext(line: string, hold = false): void {
+    this.bubble.then('Director', line, hold);
+  }
+
   private showTitleCard(): void {
     this.bubble.hide();
     const headset = this.immersive;
@@ -806,29 +826,34 @@ export class LightingLevelSystem extends createSystem({
             'Shift-drag (or scroll while dragging) to raise it. Hover for its name.',
             'Drag empty space to turn the set. Dee texts you tips.',
           ],
-      footer: 'Seven scenes. One soundstage. Zero qualifications.',
+      footer: this.canEnterXR || headset
+        ? 'Seven scenes. One soundstage. Zero qualifications.'
+        : 'Seven scenes. Zero qualifications. On a Quest? Open this page there to play in VR.',
+      button2: this.canEnterXR && !headset ? 'Play in VR' : undefined,
       button: 'Go',
     });
   }
 
   private showBriefCard(): void {
     const level = this.level;
-    this.showPage({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title}`,
-      body: level.objective,
-      footer: `Kit: ${level.kit.map(itemName).join(', ')}.`,
-    });
+    // The iPad shows only the shots and the tip; the director gives the brief from the set.
+    this.showPage({ eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length}`, body: '' });
     this.say(level.quote);
+    this.sayNext(level.objective);
   }
 
   private showWinCard(): void {
     const last = this.levelIndex === LEVELS.length - 1;
     this.showPage({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${this.level.title} · Cut!`,
-      body: this.level.lesson,
-      footer: this.level.after || undefined,
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length}`,
+      body: '',
       button: last ? 'Roll!' : 'Next scene',
     });
+    // Dee explains what you just did, then the gossip.
+    this.phone.text('dee', this.level.lesson);
+    if (this.level.after) {
+      this.phone.text('dee', this.level.after);
+    }
     this.say(last ? '"Okay. Okay. Everybody quiet. Roll it."' : this.pickDirectorLine(), true);
   }
 
@@ -846,10 +871,11 @@ export class LightingLevelSystem extends createSystem({
     this.renderTargetShot();
     this.ipad.setStatus(100, '', true);
     this.say('"Is that... Lake Como? I\'m crying. Who ARE you?"', true);
+    this.sayNext('"Background Extra #47, would you come to the front, please."', true);
+    this.phone.text('dee', 'THE GREEN SCREEN IS LAKE COMO NOW and the light on their faces matches 😭😭');
     this.showPage({
-      eyebrow: 'Rolling · Final scene',
-      body: 'The green screen is gone. The couple is on a terrace above the lake at sunset, and the light on their faces matches it.',
-      footer: 'Background Extra #47, would you come to the front, please.',
+      eyebrow: 'Rolling',
+      body: "Rolling. That's Lake Como.",
       button: 'Take a bow',
     });
   }
@@ -1112,8 +1138,6 @@ export class LightingLevelSystem extends createSystem({
     this.bubble.mesh.visible = false;
     const phoneVisible = this.phone.mesh.visible;
     this.phone.mesh.visible = false;
-    const tagVisible = this.hoverTag.mesh.visible;
-    this.hoverTag.mesh.visible = false;
     this.cameraRig.visible = false;
     for (const fixture of this.fixtures) {
       fixture.object.visible = showFixtures;
@@ -1135,7 +1159,6 @@ export class LightingLevelSystem extends createSystem({
       this.cameraRig.visible = true;
       this.bubble.mesh.visible = bubbleVisible;
       this.phone.mesh.visible = phoneVisible;
-      this.hoverTag.mesh.visible = tagVisible;
       this.ipad.object.visible = true;
       renderer.xr.enabled = xrEnabled;
     }
@@ -1371,8 +1394,8 @@ export class LightingLevelSystem extends createSystem({
       this.phase = 'won';
       this.chime.play().catch(() => undefined);
       this.ipad.setStatus(score, '', true);
-      this.showWinCard();
       this.phone.text('dee', this.pickDeeWin());
+      this.showWinCard();
       for (const text of this.level.texts ?? []) {
         this.phone.text(text.from, text.text);
       }
@@ -1511,7 +1534,10 @@ export class LightingLevelSystem extends createSystem({
       const halfW = halfH * camera.aspect;
       const margin = halfH * 0.04;
       // Play: the iPad takes about 40% of the window height at the bottom; full page: most of it, centered.
-      const fit = Math.min((halfH * (full ? 1.6 : 0.74)) / IPAD_HEIGHT, (halfW * (full ? 1.7 : 1.2)) / IPAD_WIDTH);
+      // Play: the compact strip takes about a quarter of the window height.
+      const fit = full
+        ? Math.min((halfH * 1.6) / IPAD_HEIGHT, (halfW * 1.7) / IPAD_WIDTH)
+        : Math.min((halfH * 0.5) / IPAD_COMPACT_HEIGHT, (halfW * 0.9) / IPAD_WIDTH);
       const ipadScale = this.hudScale + (fit - this.hudScale) * (this.hudPlaced ? ease : 1);
       this.hudScale = ipadScale;
       const ipadH = IPAD_HEIGHT * ipadScale;
@@ -1557,22 +1583,9 @@ export class LightingLevelSystem extends createSystem({
     this.bubble.update(delta);
   }
 
-  /** One shared label that floats over whichever light the pointer is on, saying what it is. */
+  /** Pointing at a light puts its name and what it does on the iPad's tip line. */
   private buildHoverTag(): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 170;
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    const mesh = new Mesh(
-      new PlaneGeometry(0.12, 0.0319),
-      new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false, depthTest: false, depthWrite: false }),
-    );
-    mesh.name = 'hover-tag';
-    mesh.renderOrder = 1002;
-    mesh.visible = false;
-    this.world.scene.add(mesh);
-    this.hoverTag = { mesh, canvas, texture };
+    this.hovered = undefined;
   }
 
   private updateHoverTag(): void {
@@ -1582,47 +1595,18 @@ export class LightingLevelSystem extends createSystem({
     } else {
       fixture = this.dragged ?? this.mouseHover ?? undefined;
     }
-    const tag = this.hoverTag;
-    if (fixture !== tag.shown) {
-      tag.shown = fixture;
-      if (fixture) {
-        devLog(`hover ${fixture.item.kind}`);
-        this.drawHoverTag(fixture.item);
-      }
+    if (fixture === this.hovered) {
+      return;
     }
-    tag.mesh.visible = Boolean(fixture);
+    this.hovered = fixture;
     if (!fixture) {
+      this.ipad.setHover(undefined);
       return;
     }
-    fixture.object.getWorldPosition(tag.mesh.position);
-    tag.mesh.position.y += fixture.item.aim === 'screen' || fixture.item.gel ? 0.05 : 0.038;
-    this.world.camera.getWorldQuaternion(tag.mesh.quaternion);
-  }
-
-  private drawHoverTag(item: KitItem): void {
-    const { canvas, texture } = this.hoverTag;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-    const info = KIND_INFO[item.kind];
-    const extra = item.aim === 'screen' ? ' · for the green screen' : item.gel === 'cto' ? ' · orange gel (warm)' : '';
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(12, 12, 14, 0.9)';
-    ctx.beginPath();
-    ctx.roundRect(0, 0, canvas.width, canvas.height, 28);
-    ctx.fill();
-    ctx.fillStyle = '#f5d90a';
-    ctx.font = 'bold 54px system-ui, sans-serif';
-    ctx.fillText(info.name, 28, 68);
-    const nameWidth = ctx.measureText(info.name).width;
-    ctx.fillStyle = '#9ad1a8';
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.fillText(extra.replace(' · ', ''), 28 + nameWidth + 22, 66);
-    ctx.fillStyle = '#e4e4e7';
-    ctx.font = '34px system-ui, sans-serif';
-    ctx.fillText(info.what, 28, 130);
-    texture.needsUpdate = true;
+    devLog(`hover ${fixture.item.kind}`);
+    const info = KIND_INFO[fixture.item.kind];
+    const extra = fixture.item.aim === 'screen' ? ' For the green screen.' : fixture.item.gel === 'cto' ? ' Orange gel: warm.' : '';
+    this.ipad.setHover(`${info.name}: ${info.what}${extra}`);
   }
 
   /**
@@ -1642,7 +1626,7 @@ export class LightingLevelSystem extends createSystem({
     this.houseLights = [fill, top];
     this.houseIntensity = [fill.intensity, top.intensity];
 
-    // The switch: a wall plate with a status LED and a label, at the front-left corner of the stage.
+    // The switch: a wall plate with a status LED and a label.
     const plate = new Group();
     plate.name = 'house-switch';
     const body = new Mesh(
@@ -1671,9 +1655,10 @@ export class LightingLevelSystem extends createSystem({
     label.position.set(0.006, 0, 0.0045);
     plate.add(body, led, label);
     // Placed by the stage (which is never rotated), as its own scene-level entity.
-    plate.position.set(-STAGE_WIDTH / 2 - 0.05, 0.06, STAGE_DEPTH / 2 + 0.06);
+    // Front-left edge of the apron, in front of the director and clear of the HUD.
+    plate.position.set(-0.22, 0.05, STAGE_DEPTH / 2 + 0.15);
     this.stage.localToWorld(plate.position);
-    plate.rotation.set(-0.5, 0.4, 0);
+    plate.rotation.set(-0.6, 0, 0);
     this.houseSwitch = this.createSwitch(plate.position, 0, () => {
       this.houseOn = !this.houseOn;
       devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
@@ -1765,7 +1750,8 @@ export class LightingLevelSystem extends createSystem({
     const cardHit = this.ipad.hasButton && this.raycaster.intersectObject(this.ipad.object, true)[0];
     if (cardHit) {
       fixtureHit = null;
-      press = () => this.pressCard();
+      const local = this.ipad.object.worldToLocal(cardHit.point.clone());
+      press = this.ipad.buttonAt(local.x, local.y) === 'second' ? () => this.world.launchXR() : () => this.pressCard();
     }
 
     if (press) {

@@ -2,6 +2,27 @@
 
 Notes for whoever (human or Claude) works on this next. Newest first.
 
+## 2026-11-01: playtest rounds 2 and 3, "everything is practical UI"
+
+**Design rule from ben: nothing floats.** Every piece of UI is a prop the
+player holds (the iPad with the shots, the phone with Dee's texts) or comes
+from someone on set (the director's speech bubble). New UI must go into one of
+those three before anything else is considered.
+
+**The iPad during play is just the shots plus one tip line.** Longer text
+moved to people: the brief and objective are the director's lines in a row
+(`say` then `sayNext`), and the lesson and gossip are Dee's texts. Hovering a
+light replaces the tip line with its name.
+
+**Footer text beside buttons gets cut off.** On the full iPad page the footer
+runs full width above the button row, never squeezed in beside the buttons.
+
+**Every HUD layer must be transparent.** Opaque meshes ignore `renderOrder`
+against transparent ones, so the shot images drew behind the iPad body (black).
+
+**Changing the number of lights recompiles every material** in three.js. Dim
+lights to intensity 0 instead of hiding them, or the game stalls for a second.
+
 ## 2026-11-01: playtest round 1 fixes
 
 **"Light in the shot" is a projection test, not a pixel test.** Each frame

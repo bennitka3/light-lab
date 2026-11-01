@@ -18,6 +18,7 @@ export class SpeechBubble {
   private texture: CanvasTexture;
   private material: MeshBasicMaterial;
   private remaining = 0;
+  private queue: { speaker: string; line: string; hold: boolean }[] = [];
   /** The last line said, for tests. */
   line = '';
 
@@ -45,6 +46,20 @@ export class SpeechBubble {
    * least 4 s), or until the next line when `hold` is set.
    */
   say(speaker: string, line: string, hold = false): void {
+    this.queue = [];
+    this.show(speaker, line, hold);
+  }
+
+  /** Says a line after the current one finishes. */
+  then(speaker: string, line: string, hold = false): void {
+    if (this.remaining <= 0) {
+      this.show(speaker, line, hold);
+    } else {
+      this.queue.push({ speaker, line, hold });
+    }
+  }
+
+  private show(speaker: string, line: string, hold: boolean): void {
     this.line = line;
     const words = line.split(' ').length;
     this.remaining = hold ? Infinity : Math.max(4, words / 3 + 1.5);
@@ -88,6 +103,7 @@ export class SpeechBubble {
   }
 
   hide(): void {
+    this.queue = [];
     this.remaining = 0;
     this.mesh.visible = false;
   }
@@ -100,6 +116,10 @@ export class SpeechBubble {
     this.material.opacity = Math.min(1, this.remaining / 0.5);
     if (this.remaining <= 0) {
       this.mesh.visible = false;
+      const next = this.queue.shift();
+      if (next) {
+        this.show(next.speaker, next.line, next.hold);
+      }
     }
   }
 }

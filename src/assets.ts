@@ -31,9 +31,4 @@ export default defineAssets({
   'crew-gaffer': { url: publicAssetUrl('models/crew-gaffer.glb'), type: AssetType.GLTF, priority: 'background' },
   'crew-sponsor': { url: publicAssetUrl('models/crew-sponsor.glb'), type: AssetType.GLTF, priority: 'background' },
   'crew-crafty': { url: publicAssetUrl('models/crew-crafty.glb'), type: AssetType.GLTF, priority: 'background' },
-  'welcome-panel': {
-    url: publicAssetUrl('ui/welcome.uikitml'),
-    type: AssetType.UIKitML,
-    name: 'Level Card',
-  },
 });
