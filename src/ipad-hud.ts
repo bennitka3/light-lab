@@ -323,6 +323,7 @@ export class IPad {
     roundRect(ctx, m(0.003), top + m(0.003), W - m(0.006), H - top - m(0.006), m(0.011));
     ctx.fillStyle = '#0c0c0e';
     ctx.fill();
+    this.drawTapeLabel(ctx, m, top);
     // Labels above each shot: the scene callout with the target, the match score with yours.
     ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
     ctx.fillStyle = '#f5d90a';
@@ -399,6 +400,38 @@ export class IPad {
     }
     this.texture.needsUpdate = true;
     this.refreshOverlay();
+  }
+
+  /**
+   * A strip of white gaffer tape on the iPad's top edge, labeled in marker the
+   * way crews label gear, so a new player knows this is "the iPad" every tip
+   * and text talks about (Greg's playtest: "the iPad is not very clear... is
+   * that this?"). It hangs over the top edge, outside the screen.
+   */
+  private drawTapeLabel(ctx: CanvasRenderingContext2D, m: (n: number) => number, top: number): void {
+    const label = 'VIDEO VILLAGE iPAD';
+    ctx.font = `bold ${m(0.0098)}px "Marker Felt", "Comic Sans MS", system-ui, sans-serif`;
+    const tw = ctx.measureText(label).width + m(0.014);
+    const th = m(0.0135);
+    const tx = (W - tw) / 2;
+    const ty = top - m(0.0085);
+    ctx.save();
+    ctx.translate(tx + tw / 2, ty + th / 2);
+    ctx.rotate(-0.012);
+    ctx.fillStyle = '#ecebe4';
+    ctx.fillRect(-tw / 2, -th / 2, tw, th);
+    // Torn ends: a few notches cut into each short side.
+    ctx.fillStyle = 'rgba(0,0,0,0)';
+    ctx.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 4; i++) {
+      const y = -th / 2 + (th * (i + 0.5)) / 4;
+      ctx.fillRect(-tw / 2, y - m(0.0006), m(0.0012), m(0.0012));
+      ctx.fillRect(tw / 2 - m(0.0012), y + m(0.0004), m(0.0012), m(0.0012));
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#1d1d22';
+    ctx.fillText(label, -tw / 2 + m(0.007), m(0.0035));
+    ctx.restore();
   }
 
   /**

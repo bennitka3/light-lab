@@ -3,6 +3,19 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 7: 2026-11-01 (Greg, a friend of ben's, desktop browser, first time playing)
+
+A new player with no briefing. He sent a 43-second screen recording of scene 3 (the product shot) and a text.
+
+| Greg said | Status |
+|---|---|
+| "moving the top light toward camera right... back away from camera... towards camera left, back towards camera right... I don't know where to go" | **Fixed.** Reproduced first: a bot that does exactly what the tip says won scene 3 in only 10 of 20 tries and scene 5 in 5 of 20, with the tip reversing itself hundreds of times (`scripts/follow-hints.cjs`). Cause: the tip measured how far off the light was by angle, but then named a floor direction, so on a high top light it ping-ponged left/right when the real problem was height. Now the tip tries a small move in every direction, including up and down, and names the one that helps most; it sticks with that direction while it still helps, and says "Nudge... a little" when a full move would overshoot. After: 20 of 20 in every scene, scene 3 in about 8 moves. |
+| (the match bar sat at 45% the whole time he moved the light) | **Fixed.** With the house lights on, the match was capped at 45%, so the bar never moved and gave him nothing to go on. Now the house lights halve the match instead: the bar climbs as the light gets closer and jumps up when you cut them. |
+| "cut the house lights when you want to roll, oh, interesting, ah, I just won" | Working as meant (the light was right and the house lights were the last step). The moving bar above should make that clearer. |
+| "The 'iPad' is not very clear... is that this?" (screenshot of the two-shot panel) | **Fixed, in-world.** A strip of white gaffer tape on the iPad's top edge reads "VIDEO VILLAGE iPAD", the way crews label gear. In scene 1 Dee also texts: "that iPad in your hands is the video village feed. left = the shot the director wants, right = what the camera sees now. make them match". |
+
+ben's follow-up (2026-11-01): "his struggle probably would have been resolved if the instructions said to lower the light. Maybe there's an indication once a user has locked in one axis of movement successfully." **Done, both.** ben was right: in the follow-the-tips test the new tip says "Lower the top light" on that scene. When one direction is finished and the tip moves on, it says so first: "Left-right looks good. Lower the top light." then "Height looks good. Move the top light back, away from the camera." then "Almost there. Hold it..." It stays in the tip line on the iPad, so no new UI.
+
 ## Round 6: 2026-11-01 (ben, Quest 1 headset, first time in VR, all seven scenes)
 
 Played start to finish. ben: "it was awesome to play in VR." A little choppy on the Quest 1, which is expected for 2019 hardware. The judges will play on a current Quest.
