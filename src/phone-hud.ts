@@ -1,16 +1,21 @@
 import { CanvasTexture, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace } from '@iwsdk/core';
 import type { Text } from './levels.js';
-import { wrap } from './story-card.js';
+import { wrap } from './text.js';
 
 /**
- * The player's phone, held low in the corner of the view. Dee, a friend
- * watching the monitors in video village, knows you are bluffing and texts
- * you tips; Mom texts too. New messages show a "typing" bubble first, then pop
- * in with a little bounce, like a real phone.
+ * The player's phone, held low beside the iPad. It is your chat with Dee, a
+ * friend watching the monitors in video village who knows you are bluffing
+ * and texts you tips. New messages show a "typing" bubble first, then pop in
+ * with a little bounce. Anyone else (Mom) arrives as a notification banner
+ * with a preview, the way a real phone shows a text from another chat. The
+ * phone tucks itself down when nothing new is happening.
  */
 
 export const PHONE_WIDTH = 0.1;
 export const PHONE_HEIGHT = 0.18;
+/** How long the phone stays up after a text lands, and how long a banner shows. */
+const AWAKE_SECONDS = 7;
+const BANNER_SECONDS = 5;
 const PX_W = 500;
 const PX_H = Math.round((PX_W * PHONE_HEIGHT) / PHONE_WIDTH);
 const TYPING_SECONDS = 1.1;
@@ -27,6 +32,11 @@ export class PhoneHud {
   private messages: Text[] = [];
   private queue: Text[] = [];
   private typing = 0;
+  private banner?: Text;
+  private bannerTime = 0;
+  private sinceLast = Infinity;
+  /** True while the phone should be up: a text arriving or just arrived, or the player looking at it. */
+  hovered = false;
   /** 1 right after a message lands, easing to 0; the system uses it to bounce the phone. */
   pop = 0;
   /** Every message shown so far, for tests. */
@@ -56,12 +66,36 @@ export class PhoneHud {
     this.messages = [];
     this.queue = [];
     this.typing = 0;
+    this.banner = undefined;
     this.mesh.visible = false;
+  }
+
+  get awake(): boolean {
+    return this.hovered || this.typing > 0 || this.queue.length > 0 || this.banner !== undefined || this.sinceLast < AWAKE_SECONDS;
   }
 
   update(delta: number): void {
     this.pop = Math.max(0, this.pop - delta * 2.5);
+    this.sinceLast += delta;
+    if (this.banner) {
+      this.bannerTime += delta;
+      if (this.bannerTime > BANNER_SECONDS) {
+        this.banner = undefined;
+        this.draw(false);
+      }
+    }
     if (this.queue.length === 0) {
+      return;
+    }
+    if (this.queue[0].from !== 'dee') {
+      // Someone else: a notification banner over Dee's chat, no typing bubble.
+      this.banner = this.queue.shift()!;
+      this.log.push(this.banner);
+      this.bannerTime = 0;
+      this.sinceLast = 0;
+      this.pop = 1;
+      this.mesh.visible = true;
+      this.draw(false);
       return;
     }
     const wasTyping = this.typing > 0;
@@ -79,6 +113,7 @@ export class PhoneHud {
       }
       this.typing = 0;
       this.pop = 1;
+      this.sinceLast = 0;
       this.draw(false);
     }
   }
@@ -96,9 +131,8 @@ export class PhoneHud {
     roundRect(ctx, 14, 14, PX_W - 28, PX_H - 28, 58);
     ctx.fillStyle = '#121214';
     ctx.fill();
-    // Header: the contact who texted last.
-    const last = typing ? this.queue[0] : this.messages[this.messages.length - 1];
-    const contact = CONTACTS[last?.from ?? 'dee'];
+    // Header: this is Dee's chat.
+    const contact = CONTACTS.dee;
     ctx.fillStyle = '#1c1c1f';
     ctx.fillRect(14, 60, PX_W - 28, 96);
     ctx.fillStyle = '#000';
@@ -142,10 +176,7 @@ export class PhoneHud {
       const lines = wrap(ctx, message.text, maxBubble - 40);
       const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 40);
       const height = lines.length * lineH + 26;
-      // A name above the bubble when the sender changes.
-      const showName = i === 0 || this.messages[i - 1].from !== message.from;
-      const needed = height + (showName ? 32 : 0);
-      if (y - needed < top) {
+      if (y - height < top) {
         break;
       }
       roundRect(ctx, 34, y - height, width, height, 26);
@@ -153,15 +184,41 @@ export class PhoneHud {
       ctx.fill();
       ctx.fillStyle = '#f4f4f5';
       lines.forEach((line, j) => ctx.fillText(line, 54, y - height + 40 + j * lineH));
-      y -= height;
-      if (showName) {
-        ctx.fillStyle = CONTACTS[message.from].color;
-        ctx.font = 'bold 22px system-ui, sans-serif';
-        ctx.fillText(CONTACTS[message.from].name, 40, y - 8);
-        ctx.font = '29px system-ui, sans-serif';
-        y -= 32;
-      }
-      y -= 14;
+      y -= height + 14;
+    }
+    if (this.banner) {
+      // A notification banner from another chat, dropped over the top of the screen.
+      const from = CONTACTS[this.banner.from];
+      const bx = 26;
+      const by = 64;
+      const bw = PX_W - 52;
+      ctx.font = '27px system-ui, sans-serif';
+      const lines = wrap(ctx, this.banner.text, bw - 120).slice(0, 2);
+      const bh = 76 + lines.length * 34;
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 24;
+      roundRect(ctx, bx, by, bw, bh, 30);
+      ctx.fillStyle = 'rgba(58, 58, 64, 0.97)';
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(bx + 50, by + 50, 26, 0, Math.PI * 2);
+      ctx.fillStyle = from.color;
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.font = 'bold 28px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(from.name[0], bx + 50, by + 60);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#fafafa';
+      ctx.font = 'bold 27px system-ui, sans-serif';
+      ctx.fillText(from.name, bx + 92, by + 44);
+      ctx.fillStyle = '#a1a1aa';
+      ctx.font = '22px system-ui, sans-serif';
+      ctx.fillText('now', bx + bw - 64, by + 44);
+      ctx.fillStyle = '#e4e4e7';
+      ctx.font = '27px system-ui, sans-serif';
+      lines.forEach((line, j) => ctx.fillText(line, bx + 92, by + 82 + j * 34));
     }
     this.texture.needsUpdate = true;
   }

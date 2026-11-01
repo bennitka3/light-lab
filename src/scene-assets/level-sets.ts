@@ -455,7 +455,7 @@ function createRestaurantSet(): Group {
   }
   table.add(candle, flame);
   table.position.set(0, 0, -0.015);
-  set.add(createSeat('dining', -0.04, -0.06, 0.3), createSeat('dining', 0.04, -0.06, -0.3), table);
+  set.add(createSeat('dining', -0.04, -0.06, 0.85), createSeat('dining', 0.04, -0.06, -0.85), table);
   return set;
 }
 

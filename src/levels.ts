@@ -271,7 +271,8 @@ export const LEVELS: LevelDef[] = [
     id: 'restaurant',
     title: 'Lake Como (green screen)',
     set: 'restaurant',
-    actors: [{ pos: [-0.04, 0, -0.06], rotY: 0.3 }, { pos: [0.04, 0, -0.06], rotY: -0.3 }],
+    // The couple turned toward each other, three-quarters to camera.
+    actors: [{ pos: [-0.04, 0, -0.06], rotY: 0.85 }, { pos: [0.04, 0, -0.06], rotY: -0.85 }],
     directorsChair: false,
     aim: [0, HEAD, -0.06],
     camera: { x: 0, z: 0.15, fov: 34 },
@@ -351,9 +352,11 @@ export const DIRECTOR_WINS = [
 export const DEE_WINS = [
   'NAILED IT 🙌',
   'ok how did you do that',
-  'he bought it 😂 keep going',
+  'the director bought it 😂 keep going',
   'nobody suspects a thing 🤫',
-  'honestly that looks better than the real guy',
+  'honestly better than the actual gaffer would do',
   '🔥🔥🔥',
   'video village is clapping rn',
-];
+  'I literally gasped',
+  'you might actually be good at this??',
+]
