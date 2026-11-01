@@ -331,6 +331,8 @@ export class LightingLevelSystem extends createSystem({
   private hudScale = 1;
   private hudY = 0;
   private phoneTuck = 0;
+  /** Seconds until a held thumbstick scrolls the phone again. */
+  private thumbstickWait = 0;
   // The light the pointer is on (or being moved); its switch on the iPad is outlined.
   private hovered?: Fixture;
   /** The iPad's light row: HOUSE, each light in the kit, then the lamp when there is one. */
@@ -508,6 +510,7 @@ export class LightingLevelSystem extends createSystem({
       this.creature.update(delta);
       this.updateScore(delta);
       this.phone.update(delta);
+      this.scrollPhoneWithThumbstick(delta);
       this.placeHud(delta);
       this.updateHoverTag();
     } catch (error) {
@@ -1974,6 +1977,34 @@ export class LightingLevelSystem extends createSystem({
     }
     this.updateDirector(delta);
     this.bubble.update(delta);
+  }
+
+  /**
+   * In the headset, pushing either controller's thumbstick up or down scrolls
+   * Dee's chat (up = older texts), and brings a tucked phone up first
+   * (ben, round 6). Holding it repeats, a few messages a second.
+   */
+  private scrollPhoneWithThumbstick(delta: number): void {
+    this.thumbstickWait = Math.max(0, this.thumbstickWait - delta);
+    const session = this.immersive ? this.world.renderer.xr.getSession() : null;
+    if (!session) return;
+    let y = 0;
+    for (const source of session.inputSources) {
+      const axes = source.gamepad?.axes;
+      // xr-standard: axes 2 and 3 are the thumbstick's x and y (y is negative when pushed up).
+      if (axes && axes.length >= 4 && Math.abs(axes[3]) > Math.abs(y)) y = axes[3];
+    }
+    if (Math.abs(y) < 0.6) {
+      this.thumbstickWait = 0;
+      return;
+    }
+    if (this.thumbstickWait > 0) return;
+    this.thumbstickWait = 0.28;
+    if (!this.phone.awake) {
+      this.phone.wake();
+      return;
+    }
+    this.phone.scroll(y < 0 ? 1 : -1);
   }
 
   /** The light under the pointer (or being moved); its switch on the iPad gets outlined. */

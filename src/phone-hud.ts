@@ -93,6 +93,16 @@ export class PhoneHud {
     const next = Math.max(0, Math.min(this.messages.length - 1, this.scrollBack + step));
     if (next === this.scrollBack || (step > 0 && !this.hiddenAbove)) return;
     this.scrollBack = next;
+    // Reading back through the chat keeps the phone up.
+    this.sinceLast = 0;
+    this.draw(this.typing > 0);
+  }
+
+  /** Brings the phone up for a few seconds (e.g. the player reached for its thumbstick). */
+  wake(): void {
+    if (this.awake) return;
+    this.sinceLast = 0;
+    this.mesh.visible = true;
     this.draw(this.typing > 0);
   }
 
