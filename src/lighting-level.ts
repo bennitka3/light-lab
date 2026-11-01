@@ -40,14 +40,23 @@ import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-
 import {
   createFixture,
   type FixtureKind,
-  type Gel,
   KIT_HEIGHT,
   KIT_Z,
   STAGE_DEPTH,
   STAGE_HEIGHT,
   STAGE_WIDTH,
 } from './scene-assets/soundstage.scene-asset.js';
-import { IPAD_COMPACT_HEIGHT, IPAD_HEIGHT, IPAD_WIDTH, IPad, type IPadPage } from './ipad-hud.js';
+import {
+  IPAD_COMPACT_HEIGHT,
+  IPAD_HEIGHT,
+  IPAD_WIDTH,
+  IPad,
+  type IPadControl,
+  type IPadPage,
+  KELVIN_MAX,
+  KELVIN_MIN,
+  type LightButton,
+} from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
 
 /**
@@ -128,14 +137,18 @@ const KIND_NAMES: Record<FixtureKind, string> = {
   par: 'PAR can',
 };
 
-/** What the hover label says about each kind of light. */
-const KIND_INFO: Record<FixtureKind, { name: string; what: string }> = {
-  softbox: { name: 'Softbox', what: 'Big and soft. The classic key light.' },
-  panel: { name: 'LED panel', what: 'Soft and gentle. Good for fill.' },
-  strip: { name: 'Strip box', what: 'Tall, thin and soft. Draws edges.' },
-  fresnel: { name: 'Fresnel', what: 'Hard light with crisp shadows.' },
-  par: { name: 'PAR can', what: 'Hard, narrow and punchy.' },
+/** The short name on each light's switch on the iPad. */
+const KIND_LABELS: Record<FixtureKind, string> = {
+  softbox: 'Softbox',
+  panel: 'LED panel',
+  strip: 'Strip box',
+  fresnel: 'Fresnel',
+  par: 'PAR can',
 };
+/** The bi-color dial's stops, warm to daylight. Warm roles need the warm end. */
+const KELVIN_STEPS = [3200, 4000, 4800, 5600];
+const WARM_MAX_K = 3600;
+const NEUTRAL_MIN_K = 4800;
 
 type Fixture = {
   entity: Entity;
@@ -152,6 +165,8 @@ type Fixture = {
   /** Head position in stage-local meters. */
   local: Vector3;
   on: boolean;
+  /** Color temperature; only bi-color lights (with a dial) can change it. */
+  kelvin: number;
   /** Headset grab bookkeeping for telling a tap from a move. */
   grabTime: number;
   grabStart: Vector3;
@@ -165,15 +180,26 @@ type Switch = {
   pressed: boolean;
 };
 
-function createSpot(kind: FixtureKind, gel: Gel = 'none'): SpotLight {
+/**
+ * Sets a light's color and brightness from its color temperature: 5600K is
+ * the light's own daylight color, 3200K is the warm orange of tungsten
+ * (the same as the old orange gel), in between blends.
+ */
+function applyKelvin(spot: SpotLight, kind: FixtureKind, kelvin: number): void {
   const quality = LIGHT_QUALITY[kind];
-  const color = new Color(quality.color);
-  if (gel === 'cto') {
-    color.multiply(CTO_TINT);
-  }
+  const warm = MathUtils.clamp((KELVIN_MAX - kelvin) / (KELVIN_MAX - KELVIN_MIN), 0, 1);
+  spot.color.set(quality.color);
+  KELVIN_TINT.setRGB(1, 1, 1).lerp(CTO_TINT, warm);
+  spot.color.multiply(KELVIN_TINT);
+  spot.intensity = quality.intensity * (1 + 0.4 * warm);
+}
+const KELVIN_TINT = new Color();
+
+function createSpot(kind: FixtureKind, kelvin: number = KELVIN_MAX): SpotLight {
+  const quality = LIGHT_QUALITY[kind];
   const spot = new SpotLight(
-    color,
-    quality.intensity * (gel === 'cto' ? 1.4 : 1),
+    quality.color,
+    quality.intensity,
     0,
     MathUtils.degToRad(quality.angleDeg),
     quality.penumbra,
@@ -187,13 +213,33 @@ function createSpot(kind: FixtureKind, gel: Gel = 'none'): SpotLight {
   spot.shadow.normalBias = 0.0005;
   spot.shadow.radius = quality.shadowRadius;
   spot.shadow.blurSamples = 16;
+  applyKelvin(spot, kind, kelvin);
   return spot;
 }
 
 function itemName(item: KitItem): string {
-  const gel = item.gel === 'cto' ? ' with orange gel' : '';
-  const screen = item.aim === 'screen' ? 'SCREEN ' : '';
-  return `${screen}${KIND_NAMES[item.kind]}${gel}`;
+  const prefix = item.aim === 'screen' ? 'screen ' : item.dial ? 'bi-color ' : '';
+  return `${prefix}${KIND_NAMES[item.kind]}`;
+}
+
+const ZOOM_KEY = 'lightLab.ipadZoom';
+
+/** The iPad size the player picked last time (1 = default). */
+function loadZoom(): number {
+  try {
+    const value = Number.parseFloat(window.localStorage.getItem(ZOOM_KEY) ?? '');
+    return Number.isFinite(value) ? MathUtils.clamp(value, 0.7, 1.6) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function saveZoom(zoom: number): void {
+  try {
+    window.localStorage.setItem(ZOOM_KEY, String(zoom));
+  } catch {
+    // Private windows can refuse storage; the size just won't be remembered.
+  }
 }
 
 function startLevelFromUrl(): number {
@@ -239,9 +285,7 @@ export class LightingLevelSystem extends createSystem({
   // light count, which makes three.js recompile every material (a visible stall).
   private houseLights: (HemisphereLight | DirectionalLight)[] = [];
   private houseIntensity: number[] = [];
-  private houseLed!: MeshStandardMaterial;
   private switches: Switch[] = [];
-  private houseSwitch!: Switch;
 
   // Camera shots and the monitor.
   private shotCamera!: PerspectiveCamera;
@@ -257,7 +301,7 @@ export class LightingLevelSystem extends createSystem({
 
   // The lower third, the phone, and the hover label.
   private ipadEntity!: Entity;
-  private ipadPressed = false;
+  private phonePressed = false;
   private phoneEntity!: Entity;
   private bubble = new SpeechBubble();
   private director?: { anchor: Object3D; placeholder?: Object3D };
@@ -268,9 +312,12 @@ export class LightingLevelSystem extends createSystem({
   private hudScale = 1;
   private hudY = 0;
   private phoneTuck = 0;
-  private mouseOnPhone = false;
-  // The light the pointer is on; its name shows on the iPad's tip line.
+  // The light the pointer is on (or being moved); its switch on the iPad is outlined.
   private hovered?: Fixture;
+  /** The iPad's light row: HOUSE, each light in the kit, then the lamp when there is one. */
+  private lightButtons: LightButton[] = [];
+  /** How big the player wants the iPad (the - and + buttons), remembered between visits. */
+  private ipadZoom = loadZoom();
   private canEnterXR = false;
   private mouseHover: Fixture | null = null;
   private lastDirectorLine = -1;
@@ -344,6 +391,8 @@ export class LightingLevelSystem extends createSystem({
       if ((event.key === 'Enter' || event.key === ' ') && this.ready && this.ipad.hasButton) {
         event.preventDefault();
         this.pressCard();
+      } else if ((event.key === '-' || event.key === '=' || event.key === '+') && this.ready) {
+        this.zoomIpad(event.key === '-' ? -1 : 1);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -450,7 +499,6 @@ export class LightingLevelSystem extends createSystem({
     this.buildMonitor();
     this.buildHouseLights();
     this.buildCard();
-    this.buildHoverTag();
     this.initOrbit();
     this.ready = true;
 
@@ -502,7 +550,11 @@ export class LightingLevelSystem extends createSystem({
             this.fixtures[i].on = on;
           },
           hovered: () => this.hovered?.item.kind ?? null,
-          hoverText: () => this.ipad.hoverText,
+          lightButtons: () => this.lightButtons.map((b) => ({ ...b })),
+          kelvin: (i: number) => this.fixtures[i].kelvin,
+          zoom: () => this.ipadZoom,
+          ipadScale: () => this.ipad.object.scale.x,
+          phonePinned: () => this.phone.pinned,
           enterXR: () => this.world.launchXR(),
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -511,17 +563,26 @@ export class LightingLevelSystem extends createSystem({
             const phone = camera.worldToLocal(this.phone.mesh.getWorldPosition(new Vector3()));
             return { immersive: this.immersive, card: card.toArray(), phone: phone.toArray(), phoneVisible: this.phone.mesh.visible };
           },
-          // Screen pixels of a thing, for real-mouse tests: 'card', 'house',
-          // 'card-button', a fixture index, or 'role:N' (role N's target spot).
+          // Screen pixels of a thing, for real-mouse tests: 'card', 'card-button',
+          // 'phone', iPad controls ('light:N' with N the switch on the row, 0 = HOUSE;
+          // 'warmer:N', 'cooler:N', 'size:1', 'size:-1'), a fixture index, or
+          // 'role:N' (role N's target spot).
           screenOf: (what: string | number) => {
             const v = new Vector3();
+            const control = typeof what === 'string' ? /^(light|warmer|cooler|size):(-?\d+)$/.exec(what) : null;
             if (what === 'card' || what === 'card-button') {
               v.set(what === 'card' ? 0 : this.ipad.buttonCenter.x, what === 'card' ? 0 : this.ipad.buttonCenter.y, 0);
               this.ipad.object.localToWorld(v);
+            } else if (control) {
+              const n = Number(control[2]);
+              const c = this.ipad.centerOf((ctl) =>
+                ctl.type === control[1] && ('index' in ctl ? ctl.index === n : 'step' in ctl ? ctl.step === n : false),
+              );
+              if (!c) return null;
+              v.set(c.x, c.y, 0);
+              this.ipad.object.localToWorld(v);
             } else if (what === 'phone') {
               this.phone.mesh.getWorldPosition(v);
-            } else if (what === 'house') {
-              this.houseSwitch.hit.getWorldPosition(v);
             } else if (what === 'lamp' && this.practical) {
               this.practical.switch.hit.getWorldPosition(v);
             } else if (typeof what === 'number') {
@@ -639,10 +700,11 @@ export class LightingLevelSystem extends createSystem({
       this.roleLocal({ id: 'preset', label: '', kinds: [], kindHint: '', orbit: preset }, fixture.local);
       fixture.on = true;
     }
+    this.buildLightButtons();
 
     // One hidden light per role, used only to render the target shot.
     for (const role of level.roles) {
-      const spot = createSpot(role.kinds[0], role.gel);
+      const spot = createSpot(role.kinds[0], role.warm ? KELVIN_MIN : KELVIN_MAX);
       spot.visible = false;
       this.world.scene.add(spot, spot.target);
       this.targetSpots.push(spot);
@@ -683,12 +745,7 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private createFixtureEntity(item: KitItem, kitX: number): Fixture {
-    const object = createFixture(item.kind, item.gel ?? 'none');
-    if (item.aim === 'screen') {
-      object.add(this.makeTag('SCREEN', '#4ade80'));
-    } else if (item.gel === 'cto') {
-      object.add(this.makeTag('WARM', '#ff9a45'));
-    }
+    const object = createFixture(item.kind);
     const led = this.makeLed(object);
     const entity = this.world.createTransformEntity(object);
     entity.addComponent(StageLight, { kind: item.kind, kitX });
@@ -703,7 +760,11 @@ export class LightingLevelSystem extends createSystem({
     entity.addComponent(OneHandGrabbable, { rotate: false, translate: true });
     const head = object.getObjectByName('fixture-head')!;
     const face = head.getObjectByName('fixture-face');
-    const spot = createSpot(item.kind, item.gel);
+    if (item.dial && face instanceof Mesh) {
+      // Its own face material, so the glow can follow the dial.
+      face.material = (face.material as MeshStandardMaterial).clone();
+    }
+    const spot = createSpot(item.kind);
     spot.name = `${item.kind}-light`;
     spot.visible = false;
     this.world.scene.add(spot, spot.target);
@@ -721,6 +782,7 @@ export class LightingLevelSystem extends createSystem({
       spot,
       local: new Vector3(kitX, KIT_HEIGHT, KIT_Z),
       on: false,
+      kelvin: KELVIN_MAX,
       grabTime: 0,
       grabStart: new Vector3(),
     };
@@ -763,16 +825,15 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
-  /** Shows a page on the iPad; it only catches rays and clicks while it has a button. */
+  /** Shows a page on the iPad. */
   private showPage(page: IPadPage): void {
     this.ipad.show(page);
     if (!this.ipadEntity) {
       return;
     }
-    if (page.button && !this.ipadEntity.hasComponent(RayInteractable)) {
+    // The iPad is always pressable: its light switches work all through a scene.
+    if (!this.ipadEntity.hasComponent(RayInteractable)) {
       this.ipadEntity.addComponent(RayInteractable);
-    } else if (!page.button && this.ipadEntity.hasComponent(RayInteractable)) {
-      this.ipadEntity.removeComponent(RayInteractable);
     }
   }
 
@@ -816,15 +877,15 @@ export class LightingLevelSystem extends createSystem({
       steps: headset
         ? [
             'Make YOUR SHOT on this iPad match the director\'s TARGET.',
-            'Point at a light and quick-pinch to switch it on or off.',
-            'Pinch and hold a light to move it. Point at things to see their names.',
-            'The director talks from the set. Dee texts you tips.',
+            'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
+            'Pinch and hold a light to move it. Switch one on to see which it is.',
+            'The director talks from the set. Dee texts you tips: tap the phone to keep it up.',
           ]
         : [
             'Make YOUR SHOT on this iPad match the director\'s TARGET.',
-            'Click a light to switch it on or off. Drag it to move it.',
-            'Shift-drag (or scroll while dragging) to raise it. Hover for its name.',
-            'Drag empty space to turn the set. Dee texts you tips.',
+            'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
+            'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
+            'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
           ],
       footer: this.canEnterXR || headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
@@ -907,29 +968,6 @@ export class LightingLevelSystem extends createSystem({
     return led;
   }
 
-  /** A little label floating above a light, so special lights are easy to tell apart. */
-  private makeTag(text: string, color: string): Mesh {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 80;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = 'rgba(10,10,12,0.85)';
-      ctx.fillRect(0, 0, 256, 80);
-      ctx.fillStyle = color;
-      ctx.font = 'bold 52px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, 128, 42);
-    }
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    const tag = new Mesh(new PlaneGeometry(0.03, 0.0094), new MeshBasicMaterial({ map: texture, toneMapped: false }));
-    tag.name = 'fixture-tag';
-    tag.position.set(0, 0.026, 0);
-    return tag;
-  }
-
   /** An invisible press target at a world position, for the mouse, a ray or a poke. */
   private createSwitch(worldPosition: Vector3, size: number, toggle: () => void, visual?: Object3D): Switch {
     const hit =
@@ -960,14 +998,14 @@ export class LightingLevelSystem extends createSystem({
       }
       sw.pressed = pressed;
     }
-    const ipadPressed = this.immersive && this.ipadEntity.hasComponent(Pressed);
-    if (ipadPressed && !this.ipadPressed) {
-      this.pressCard();
+    // The iPad's own controls are handled by its pointer listener (it needs the hit point).
+    const phonePressed = this.immersive && this.phoneEntity.hasComponent(Pressed);
+    if (phonePressed && !this.phonePressed) {
+      this.phone.togglePin();
     }
-    this.ipadPressed = ipadPressed;
+    this.phonePressed = phonePressed;
 
     this.setHouseLights(this.houseOn);
-    this.houseLed.emissive.set(this.houseOn ? '#4ade80' : '#3a1010');
     if (this.practical) {
       this.practical.shade.emissiveIntensity = this.practical.on ? 1.4 : 0;
       this.practical.bulb.intensity = this.practical.on ? 0.06 : 0;
@@ -988,6 +1026,97 @@ export class LightingLevelSystem extends createSystem({
     devLog(`light ${fixture.item.kind} switched ${fixture.on ? 'off' : 'on'}`);
     fixture.on = !fixture.on;
     this.resetHold();
+  }
+
+  private toggleHouse(): void {
+    this.houseOn = !this.houseOn;
+    devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
+    this.resetHold();
+  }
+
+  /** Turns a bi-color light's dial one stop warmer (-1) or cooler (+1). */
+  private turnDial(fixture: Fixture, step: 1 | -1): void {
+    if (!fixture.item.dial) return;
+    const i = KELVIN_STEPS.indexOf(fixture.kelvin);
+    const next = KELVIN_STEPS[MathUtils.clamp((i < 0 ? KELVIN_STEPS.length - 1 : i) + step, 0, KELVIN_STEPS.length - 1)];
+    this.setKelvin(fixture, next);
+  }
+
+  private setKelvin(fixture: Fixture, kelvin: number): void {
+    fixture.kelvin = kelvin;
+    applyKelvin(fixture.spot, fixture.item.kind, kelvin);
+    if (fixture.face) {
+      const warm = MathUtils.clamp((KELVIN_MAX - kelvin) / (KELVIN_MAX - KELVIN_MIN), 0, 1);
+      fixture.face.emissive.set('#ffffff').lerp(CTO_TINT, warm);
+    }
+    devLog(`light ${fixture.item.kind} dialed to ${kelvin}K`);
+    this.resetHold();
+  }
+
+  /** Builds the iPad's light row for the scene: HOUSE, each light in the kit, then the lamp. */
+  private buildLightButtons(): void {
+    const screens = this.level.kit.filter((item) => item.aim === 'screen').length;
+    let screenN = 0;
+    this.lightButtons = [{ label: 'HOUSE', on: this.houseOn }];
+    for (const fixture of this.fixtures) {
+      const item = fixture.item;
+      let label = KIND_LABELS[item.kind];
+      if (item.aim === 'screen') {
+        screenN += 1;
+        label = screens > 1 ? `Screen ${screenN}` : 'Screen';
+      }
+      this.lightButtons.push({ label, on: fixture.on, kelvin: item.dial ? fixture.kelvin : undefined });
+    }
+    if (this.practical) {
+      this.lightButtons.push({ label: 'Lamp', on: this.practical.on });
+    }
+  }
+
+  /** Copies the lights' state onto the iPad's switches (no allocation unless something changed). */
+  private updateLightButtons(): void {
+    const buttons = this.lightButtons;
+    if (buttons.length === 0) return;
+    buttons[0].on = this.houseOn;
+    this.fixtures.forEach((fixture, i) => {
+      const button = buttons[i + 1];
+      if (!button) return;
+      button.on = fixture.on;
+      if (button.kelvin !== undefined) button.kelvin = fixture.kelvin;
+    });
+    if (this.practical && buttons.length > this.fixtures.length + 1) {
+      buttons[this.fixtures.length + 1].on = this.practical.on;
+    }
+    const highlight = this.hovered ? this.fixtures.indexOf(this.hovered) + 1 : -1;
+    this.ipad.setLights(this.ipad.isFull ? [] : buttons, highlight);
+  }
+
+  /** Acts on a press on the iPad. */
+  private pressIpad(control: IPadControl): void {
+    if (control.type === 'main') {
+      this.pressCard();
+    } else if (control.type === 'second') {
+      this.world.launchXR();
+    } else if (control.type === 'size') {
+      this.zoomIpad(control.step);
+    } else if (control.type === 'light') {
+      const n = control.index;
+      if (n === 0) {
+        this.toggleHouse();
+      } else if (n <= this.fixtures.length) {
+        this.toggle(this.fixtures[n - 1]);
+      } else if (this.practical) {
+        this.practical.switch.toggle();
+      }
+    } else if (control.type === 'warmer' || control.type === 'cooler') {
+      const fixture = this.fixtures[control.index - 1];
+      if (fixture) this.turnDial(fixture, control.type === 'warmer' ? -1 : 1);
+    }
+  }
+
+  private zoomIpad(step: 1 | -1): void {
+    this.ipadZoom = MathUtils.clamp(Math.round((this.ipadZoom + step * 0.15) * 100) / 100, 0.7, 1.6);
+    saveZoom(this.ipadZoom);
+    devLog(`iPad size ${this.ipadZoom}`);
   }
 
   private updateGrab(fixture: Fixture, delta: number): void {
@@ -1206,7 +1335,7 @@ export class LightingLevelSystem extends createSystem({
   private fits(role: Role, fixture: Fixture): boolean {
     return (
       role.kinds.includes(fixture.item.kind) &&
-      (role.gel ?? 'none') === (fixture.item.gel ?? 'none') &&
+      (role.warm ? fixture.kelvin <= WARM_MAX_K : fixture.kelvin >= NEUTRAL_MIN_K) &&
       (role.aim ?? 'cast') === (fixture.item.aim ?? 'cast')
     );
   }
@@ -1253,16 +1382,25 @@ export class LightingLevelSystem extends createSystem({
       };
     }
     if (this.houseOn) {
-      return { score: Math.min(score, 45), hint: 'The house lights flatten everything. Hit the HOUSE switch.' };
+      return { score: Math.min(score, 45), hint: 'The house lights flatten everything. Tap HOUSE on the iPad.' };
     }
     if (level.practical && !this.practical?.on) {
-      return { score: Math.min(score, 60), hint: this.immersive ? 'The lamp in the shot is off. Point at it and pinch to switch it on.' : 'The lamp in the shot is off. Click it to switch it on.' };
+      return { score: Math.min(score, 60), hint: 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
     const missing = assigned.filter((a) => !a.fixture);
     if (missing.length > 0) {
       const role = missing[0].role;
       // Is a wrong light sitting where this role should be?
       const wrong = extras.find((f) => this.roleFit(role, f.local) > 0.3);
+      if (wrong && wrong.item.dial && role.kinds.includes(wrong.item.kind) && (role.aim ?? 'cast') === (wrong.item.aim ?? 'cast')) {
+        // The right light in the right place, at the wrong color temperature.
+        return {
+          score,
+          hint: role.warm
+            ? `Right light, wrong color: dial the ${KIND_NAMES[wrong.item.kind]} down to 3200K (warm).`
+            : `Right light, wrong color: dial the ${KIND_NAMES[wrong.item.kind]} up to 5600K.`,
+        };
+      }
       if (wrong) {
         return {
           score,
@@ -1270,7 +1408,7 @@ export class LightingLevelSystem extends createSystem({
         };
       }
       const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
-      return { score, hint: on.length === 0 ? (this.immersive ? 'Point at a light in the kit and quick-pinch to switch it on.' : 'Click a light in the kit to switch it on.') : `${label} Use ${role.kindHint}.` };
+      return { score, hint: on.length === 0 ? "Tap a light's button on the iPad to switch it on." : `${label} Use ${role.kindHint}.` };
     }
     if (extras.length > 0) {
       score = Math.min(score, 70);
@@ -1474,6 +1612,17 @@ export class LightingLevelSystem extends createSystem({
   private buildCard(): void {
     // The iPad and the phone are placed in front of the view every frame (placeHud).
     this.ipadEntity = this.world.createTransformEntity(this.ipad.object);
+    // In the headset a ray press reports where it hit, so the right switch on the iPad flips.
+    const onIpadDown = (event: { point?: Vector3 }) => {
+      if (!this.immersive || !event.point) return;
+      const local = this.ipad.object.worldToLocal(this.v4.copy(event.point));
+      if (!this.ipad.contains(local.y)) return;
+      this.pressIpad(this.ipad.controlAt(local.x, local.y));
+    };
+    (this.ipad.object as unknown as { addEventListener: (type: string, fn: (event: { point?: Vector3 }) => void) => void }).addEventListener(
+      'pointerdown',
+      onIpadDown,
+    );
     this.showPage(this.ipad.page);
     this.phoneEntity = this.world.createTransformEntity(this.phone.mesh);
     this.phoneEntity.addComponent(RayInteractable);
@@ -1523,7 +1672,6 @@ export class LightingLevelSystem extends createSystem({
     camera.getWorldPosition(this.headWorld);
     const ipad = this.ipad.object;
     const phone = this.phone.mesh;
-    this.phone.hovered = this.immersive ? this.phoneEntity.hasComponent(Hovered) : this.mouseOnPhone;
     const bounce = Math.sin(this.phone.pop * Math.PI) * 0.01;
     const ease = 1 - Math.exp(-delta * 6);
     this.phoneTuck += ((this.phone.awake ? 0 : 1) - this.phoneTuck) * ease;
@@ -1537,7 +1685,7 @@ export class LightingLevelSystem extends createSystem({
       // Play: the compact strip takes about a quarter of the window height.
       const fit = full
         ? Math.min((halfH * 1.6) / IPAD_HEIGHT, (halfW * 1.7) / IPAD_WIDTH)
-        : Math.min((halfH * 0.5) / IPAD_COMPACT_HEIGHT, (halfW * 0.9) / IPAD_WIDTH);
+        : Math.min((halfH * 0.55 * this.ipadZoom) / IPAD_COMPACT_HEIGHT, (halfW * 1.25) / IPAD_WIDTH);
       const ipadScale = this.hudScale + (fit - this.hudScale) * (this.hudPlaced ? ease : 1);
       this.hudScale = ipadScale;
       const ipadH = IPAD_HEIGHT * ipadScale;
@@ -1551,7 +1699,10 @@ export class LightingLevelSystem extends createSystem({
       ipad.position.copy(camera.localToWorld(this.hudTarget));
       ipad.quaternion.copy(camera.getWorldQuaternion(ipad.quaternion));
       // The phone stands just right of the iPad, about as tall, and slides down when idle.
-      const phoneScale = Math.min((halfH * 0.85) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH);
+      const phoneScale = Math.max(
+        (halfH * 0.55) / PHONE_HEIGHT,
+        Math.min((halfH * 0.9) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH),
+      );
       const phoneH = PHONE_HEIGHT * phoneScale;
       phone.scale.setScalar(phoneScale);
       const phoneX = Math.min(ipadW / 2 + margin + (PHONE_WIDTH * phoneScale) / 2, halfW - margin - (PHONE_WIDTH * phoneScale) / 2);
@@ -1560,7 +1711,7 @@ export class LightingLevelSystem extends createSystem({
       phone.position.copy(camera.localToWorld(this.hudTarget));
       phone.quaternion.copy(ipad.quaternion);
     } else {
-      ipad.scale.setScalar(full ? 1 : 0.75);
+      ipad.scale.setScalar(full ? 1 : 0.75 * this.ipadZoom);
       phone.scale.setScalar(1);
       const follow = this.xrPlaced ? 1 - Math.exp(-delta * 3) : 1;
       this.xrPlaced = true;
@@ -1583,11 +1734,7 @@ export class LightingLevelSystem extends createSystem({
     this.bubble.update(delta);
   }
 
-  /** Pointing at a light puts its name and what it does on the iPad's tip line. */
-  private buildHoverTag(): void {
-    this.hovered = undefined;
-  }
-
+  /** The light under the pointer (or being moved); its switch on the iPad gets outlined. */
   private updateHoverTag(): void {
     let fixture: Fixture | undefined;
     if (this.immersive) {
@@ -1595,24 +1742,17 @@ export class LightingLevelSystem extends createSystem({
     } else {
       fixture = this.dragged ?? this.mouseHover ?? undefined;
     }
-    if (fixture === this.hovered) {
-      return;
+    if (fixture !== this.hovered) {
+      this.hovered = fixture;
+      if (fixture) devLog(`hover ${fixture.item.kind}`);
     }
-    this.hovered = fixture;
-    if (!fixture) {
-      this.ipad.setHover(undefined);
-      return;
-    }
-    devLog(`hover ${fixture.item.kind}`);
-    const info = KIND_INFO[fixture.item.kind];
-    const extra = fixture.item.aim === 'screen' ? ' For the green screen.' : fixture.item.gel === 'cto' ? ' Orange gel: warm.' : '';
-    this.ipad.setHover(`${info.name}: ${info.what}${extra}`);
+    this.updateLightButtons();
   }
 
   /**
    * The studio's house lights: flat, even light from above that shows the
    * whole set but flattens the face. They start on, are left out of the
-   * target shot, and the HOUSE switch beside the stage turns them off.
+   * target shot, and HOUSE on the iPad turns them off.
    */
   private buildHouseLights(): void {
     const fill = new HemisphereLight('#f4f1ea', '#3a3631', 1.4);
@@ -1626,44 +1766,7 @@ export class LightingLevelSystem extends createSystem({
     this.houseLights = [fill, top];
     this.houseIntensity = [fill.intensity, top.intensity];
 
-    // The switch: a wall plate with a status LED and a label.
-    const plate = new Group();
-    plate.name = 'house-switch';
-    const body = new Mesh(
-      new BoxGeometry(0.05, 0.034, 0.008),
-      new MeshStandardMaterial({ color: '#2a2a2e', roughness: 0.5, metalness: 0.3 }),
-    );
-    this.houseLed = new MeshStandardMaterial({ color: '#111', emissive: '#4ade80', emissiveIntensity: 2 });
-    const led = new Mesh(new BoxGeometry(0.006, 0.006, 0.002), this.houseLed);
-    led.position.set(-0.016, 0, 0.0045);
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = '#f5d90a';
-      ctx.font = 'bold 64px system-ui, sans-serif';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('HOUSE', 20, 64);
-    }
-    const labelTexture = new CanvasTexture(canvas);
-    labelTexture.colorSpace = SRGBColorSpace;
-    const label = new Mesh(
-      new PlaneGeometry(0.032, 0.016),
-      new MeshBasicMaterial({ map: labelTexture, transparent: true, toneMapped: false }),
-    );
-    label.position.set(0.006, 0, 0.0045);
-    plate.add(body, led, label);
-    // Placed by the stage (which is never rotated), as its own scene-level entity.
-    // Front-left edge of the apron, in front of the director and clear of the HUD.
-    plate.position.set(-0.22, 0.05, STAGE_DEPTH / 2 + 0.15);
-    this.stage.localToWorld(plate.position);
-    plate.rotation.set(-0.6, 0, 0);
-    this.houseSwitch = this.createSwitch(plate.position, 0, () => {
-      this.houseOn = !this.houseOn;
-      devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
-      this.resetHold();
-    }, plate);
+    // Its switch is HOUSE on the iPad's light row.
   }
 
   // --- Test helper -------------------------------------------------------------
@@ -1675,6 +1778,11 @@ export class LightingLevelSystem extends createSystem({
     const used = new Set<Fixture>();
     for (const fixture of this.fixtures) fixture.on = false;
     for (const role of this.level.roles) {
+      if (role.warm) {
+        // Dial the bi-color light for this role down to warm first.
+        const dial = this.fixtures.find((f) => !used.has(f) && f.item.dial && role.kinds.includes(f.item.kind));
+        if (dial && dial.kelvin !== KELVIN_MIN) this.setKelvin(dial, KELVIN_MIN);
+      }
       const fixture = this.fixtures.find((f) => !used.has(f) && this.fits(role, f));
       if (!fixture) continue;
       used.add(fixture);
@@ -1746,12 +1854,17 @@ export class LightingLevelSystem extends createSystem({
         press = sw.toggle;
       }
     }
-    // The lower third sits on top of everything, so it wins when it has a button.
-    const cardHit = this.ipad.hasButton && this.raycaster.intersectObject(this.ipad.object, true)[0];
-    if (cardHit) {
+    // The iPad and the phone sit on top of everything, so they win.
+    const cardHit = this.raycaster.intersectObject(this.ipad.object, true)[0];
+    const cardLocal = cardHit ? this.ipad.object.worldToLocal(this.v4.copy(cardHit.point)) : null;
+    if (cardLocal && this.ipad.contains(cardLocal.y)) {
       fixtureHit = null;
-      const local = this.ipad.object.worldToLocal(cardHit.point.clone());
-      press = this.ipad.buttonAt(local.x, local.y) === 'second' ? () => this.world.launchXR() : () => this.pressCard();
+      const control = this.ipad.controlAt(cardLocal.x, cardLocal.y);
+      // A press on the iPad that misses every control does nothing (it doesn't turn the view).
+      press = () => this.pressIpad(control);
+    } else if (this.raycaster.intersectObject(this.phone.mesh, false).length > 0) {
+      fixtureHit = null;
+      press = () => this.phone.togglePin();
     }
 
     if (press) {
@@ -1790,9 +1903,8 @@ export class LightingLevelSystem extends createSystem({
         this.dragged.local.z = this.v1.z;
       }
     } else if (!this.orbiting && this.ready && !this.immersive) {
-      // Hovering: which light is under the pointer, for its name label, and the phone.
+      // Hovering: which light is under the pointer, so its switch on the iPad lights up.
       this.setPointerRay(event.clientX, event.clientY);
-      this.mouseOnPhone = this.raycaster.intersectObject(this.phone.mesh, false).length > 0;
       let nearest = Infinity;
       this.mouseHover = null;
       for (const fixture of this.fixtures) {

@@ -32,7 +32,9 @@ const { chromium } = require('playwright');
   results.cardStartsScene = (await api(() => window.lightLab.level())).phase === 'playing';
 
   results.houseStartsOn = await api(() => window.lightLab.houseOn());
-  await click(await at('house'));
+  // The iPad's light row is drawn on the next frame after the scene starts.
+  await page.waitForFunction(() => window.lightLab.screenOf('light:0') !== null, null, { timeout: 10000 });
+  await click(await at('light:0'));
   results.houseSwitchWorks = !(await api(() => window.lightLab.houseOn()));
 
   const idx = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.kind === 'softbox'));
@@ -53,9 +55,9 @@ const { chromium } = require('playwright');
   results.clickTurnsOn = await api((i) => window.lightLab.fixtures()[i].on, idx);
 
   const yaw0 = await api(() => window.lightLab.orbit.yaw);
-  await page.mouse.move(640, 690);
+  await page.mouse.move(1150, 150);
   await page.mouse.down();
-  await page.mouse.move(540, 690, { steps: 10 });
+  await page.mouse.move(1050, 150, { steps: 10 });
   await page.mouse.up();
   results.emptyDragOrbits = Math.abs((await api(() => window.lightLab.orbit.yaw)) - yaw0) > 0.1;
   const r0 = await api(() => window.lightLab.orbit.radius);

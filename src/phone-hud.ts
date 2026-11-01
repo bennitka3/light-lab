@@ -8,7 +8,8 @@ import { wrap } from './text.js';
  * and texts you tips. New messages show a "typing" bubble first, then pop in
  * with a little bounce. Anyone else (Mom) arrives as a notification banner
  * with a preview, the way a real phone shows a text from another chat. The
- * phone tucks itself down when nothing new is happening.
+ * phone pops up when a text lands and tucks itself down again a few seconds
+ * later, unless the player taps it to keep it up (tap again to tuck it).
  */
 
 export const PHONE_WIDTH = 0.1;
@@ -35,8 +36,8 @@ export class PhoneHud {
   private banner?: Text;
   private bannerTime = 0;
   private sinceLast = Infinity;
-  /** True while the phone should be up: a text arriving or just arrived, or the player looking at it. */
-  hovered = false;
+  /** The player tapped the phone to keep it up. */
+  pinned = false;
   /** 1 right after a message lands, easing to 0; the system uses it to bounce the phone. */
   pop = 0;
   /** Every message shown so far, for tests. */
@@ -70,8 +71,13 @@ export class PhoneHud {
     this.mesh.visible = false;
   }
 
+  togglePin(): void {
+    this.pinned = !this.pinned;
+    this.draw(this.typing > 0);
+  }
+
   get awake(): boolean {
-    return this.hovered || this.typing > 0 || this.queue.length > 0 || this.banner !== undefined || this.sinceLast < AWAKE_SECONDS;
+    return this.pinned || this.typing > 0 || this.queue.length > 0 || this.banner !== undefined || this.sinceLast < AWAKE_SECONDS;
   }
 
   update(delta: number): void {
@@ -148,15 +154,18 @@ export class PhoneHud {
     ctx.fillText(contact.name[0], 64, 119);
     ctx.textAlign = 'left';
     ctx.fillStyle = '#fafafa';
-    ctx.font = 'bold 28px system-ui, sans-serif';
-    ctx.fillText(contact.name, 106, 118);
+    ctx.font = 'bold 30px system-ui, sans-serif';
+    ctx.fillText('Dee', 106, 106);
+    ctx.fillStyle = '#a1a1aa';
+    ctx.font = '22px system-ui, sans-serif';
+    ctx.fillText(this.pinned ? 'video village · tap to tuck away' : 'video village · tap to keep open', 106, 136);
 
     // Bubbles, newest at the bottom; older ones scroll off the top.
-    const maxBubble = PX_W - 120;
-    const lineH = 36;
+    const maxBubble = PX_W - 70;
+    const lineH = 48;
     const bottom = PX_H - 50;
     const top = 172;
-    ctx.font = '29px system-ui, sans-serif';
+    ctx.font = '40px system-ui, sans-serif';
     let y = bottom;
     if (typing) {
       // The "..." typing bubble.
@@ -173,9 +182,9 @@ export class PhoneHud {
     }
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const message = this.messages[i];
-      const lines = wrap(ctx, message.text, maxBubble - 40);
-      const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 40);
-      const height = lines.length * lineH + 26;
+      const lines = wrap(ctx, message.text, maxBubble - 44);
+      const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 44);
+      const height = lines.length * lineH + 30;
       if (y - height < top) {
         break;
       }
@@ -183,7 +192,7 @@ export class PhoneHud {
       ctx.fillStyle = '#2c2c2e';
       ctx.fill();
       ctx.fillStyle = '#f4f4f5';
-      lines.forEach((line, j) => ctx.fillText(line, 54, y - height + 40 + j * lineH));
+      lines.forEach((line, j) => ctx.fillText(line, 56, y - height + 52 + j * lineH));
       y -= height + 14;
     }
     if (this.banner) {
@@ -192,9 +201,9 @@ export class PhoneHud {
       const bx = 26;
       const by = 64;
       const bw = PX_W - 52;
-      ctx.font = '27px system-ui, sans-serif';
-      const lines = wrap(ctx, this.banner.text, bw - 120).slice(0, 2);
-      const bh = 76 + lines.length * 34;
+      ctx.font = '34px system-ui, sans-serif';
+      const lines = wrap(ctx, this.banner.text, bw - 110).slice(0, 3);
+      const bh = 80 + lines.length * 42;
       ctx.shadowColor = 'rgba(0,0,0,0.6)';
       ctx.shadowBlur = 24;
       roundRect(ctx, bx, by, bw, bh, 30);
@@ -217,8 +226,8 @@ export class PhoneHud {
       ctx.font = '22px system-ui, sans-serif';
       ctx.fillText('now', bx + bw - 64, by + 44);
       ctx.fillStyle = '#e4e4e7';
-      ctx.font = '27px system-ui, sans-serif';
-      lines.forEach((line, j) => ctx.fillText(line, bx + 92, by + 82 + j * 34));
+      ctx.font = '34px system-ui, sans-serif';
+      lines.forEach((line, j) => ctx.fillText(line, bx + 92, by + 88 + j * 42));
     }
     this.texture.needsUpdate = true;
   }

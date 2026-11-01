@@ -33,6 +33,26 @@ export type IPadPage = {
   steps?: string[];
 };
 
+/** One switch on the iPad's light row: a light from the kit, the house lights, or the lamp. */
+export type LightButton = {
+  label: string;
+  on: boolean;
+  /** Bi-color lights show their color temperature with a dial (◀ warmer, ▶ cooler). */
+  kelvin?: number;
+};
+
+/** What a press on the iPad landed on. */
+export type IPadControl =
+  | { type: 'main' }
+  | { type: 'second' }
+  | { type: 'light'; index: number }
+  | { type: 'warmer'; index: number }
+  | { type: 'cooler'; index: number }
+  | { type: 'size'; step: 1 | -1 }
+  | { type: 'none' };
+
+type Rect = { x: number; y: number; w: number; h: number; control: IPadControl };
+
 export const IPAD_WIDTH = 0.4;
 export const IPAD_HEIGHT = 0.27;
 const PX = 4000; // canvas pixels per meter
@@ -44,10 +64,15 @@ const SHOT_W = (IPAD_WIDTH - 2 * BEZEL - GAP) / 2;
 const SHOT_H = (SHOT_W * 9) / 16;
 // In play the iPad is a compact strip: just the two shots and the tip, along the
 // bottom of the plane (the part above is left transparent).
-export const IPAD_COMPACT_HEIGHT = 0.165;
+export const IPAD_COMPACT_HEIGHT = 0.195;
 const COMPACT_TOP = 0.27 - IPAD_COMPACT_HEIGHT;
 const SHOT_TOP = COMPACT_TOP + 0.022;
+/** The row of light switches under the shots. */
+const ROW_TOP = SHOT_TOP + 0.103 + 0.011;
+const ROW_H = 0.022;
 const SMALL_BUTTON = { w: 0.1, h: 0.024 };
+export const KELVIN_MIN = 3200;
+export const KELVIN_MAX = 5600;
 const BUTTON = { w: 0.105, h: 0.032 };
 /** The button's center in the iPad's own meters (origin at its center), for tests that click it. */
 const FULL_BUTTON_CENTER = {
@@ -59,7 +84,7 @@ const SECOND_BUTTON_CENTER = {
   x: FULL_BUTTON_CENTER.x - BUTTON.w / 2 - 0.01 - BUTTON2.w / 2,
   y: FULL_BUTTON_CENTER.y,
 };
-const SMALL_BUTTON_TOP = SHOT_TOP + SHOT_H + 0.009 + 0.001;
+const SMALL_BUTTON_TOP = ROW_TOP + ROW_H + 0.004;
 const SMALL_BUTTON_CENTER = {
   x: IPAD_WIDTH / 2 - BEZEL - SMALL_BUTTON.w / 2,
   y: IPAD_HEIGHT / 2 - (SMALL_BUTTON_TOP + SMALL_BUTTON.h / 2),
@@ -75,8 +100,12 @@ export class IPad {
   private score = 0;
   private hint = '';
   private won = false;
-  /** What the pointed-at light is, shown on the tip line instead of the hint. */
-  hoverText?: string;
+  /** The light switches along the row under the shots. */
+  private lights: LightButton[] = [];
+  /** Which switch to outline (the light under the pointer, or being moved). */
+  private highlight = -1;
+  /** Where each control was last drawn, in canvas pixels, for presses. */
+  private rects: Rect[] = [];
   /** Draws something over the live shot (used by a special effect); called on every redraw. */
   overLive?: (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => boolean;
 
@@ -137,13 +166,52 @@ export class IPad {
   }
 
   /**
-   * Which button a point on the iPad (its own meters, origin at the center)
-   * lands on. Anywhere else counts as the main button, so it is easy to hit.
+   * What a point on the iPad (its own meters, origin at the center) lands on:
+   * a light switch, a dial arrow, a size button, or a page button. On a full
+   * page anywhere else counts as the main button, so it is easy to hit.
    */
-  buttonAt(x: number, y: number): 'main' | 'second' {
-    if (!this.page.full || !this.page.button2) return 'main';
-    const c = SECOND_BUTTON_CENTER;
-    return Math.abs(x - c.x) < BUTTON2.w / 2 && Math.abs(y - c.y) < BUTTON.h / 2 ? 'second' : 'main';
+  controlAt(x: number, y: number): IPadControl {
+    const px = (x + IPAD_WIDTH / 2) * PX;
+    const py = (IPAD_HEIGHT / 2 - y) * PX;
+    if (this.page.full) {
+      if (this.page.button2) {
+        const c = SECOND_BUTTON_CENTER;
+        if (Math.abs(x - c.x) < BUTTON2.w / 2 && Math.abs(y - c.y) < BUTTON.h / 2) return { type: 'second' };
+      }
+      return this.page.button ? { type: 'main' } : { type: 'none' };
+    }
+    for (const rect of this.rects) {
+      if (px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h) return rect.control;
+    }
+    return { type: 'none' };
+  }
+
+  /** The same, from a texture coordinate (headset pointer hits report these). */
+  controlAtUv(u: number, v: number): IPadControl {
+    return this.controlAt((u - 0.5) * IPAD_WIDTH, (v - 0.5) * IPAD_HEIGHT);
+  }
+
+  /** The center of a control in the iPad's own meters, for tests that click it. */
+  centerOf(match: (control: IPadControl) => boolean): { x: number; y: number } | null {
+    const rect = this.rects.find((r) => match(r.control));
+    if (!rect) return null;
+    return { x: (rect.x + rect.w / 2) / PX - IPAD_WIDTH / 2, y: IPAD_HEIGHT / 2 - (rect.y + rect.h / 2) / PX };
+  }
+
+  /** Is this point on the visible part of the iPad (in play the top of the plane is empty)? */
+  contains(y: number): boolean {
+    return this.page.full || IPAD_HEIGHT / 2 - y >= COMPACT_TOP;
+  }
+
+  setLights(lights: LightButton[], highlight: number): void {
+    const same =
+      highlight === this.highlight &&
+      lights.length === this.lights.length &&
+      lights.every((l, i) => l.on === this.lights[i].on && l.kelvin === this.lights[i].kelvin && l.label === this.lights[i].label);
+    if (same) return;
+    this.lights = lights.map((l) => ({ ...l }));
+    this.highlight = highlight;
+    this.draw();
   }
 
   /** The button's center in the iPad's own meters (origin at its center), for tests that click it. */
@@ -164,11 +232,6 @@ export class IPad {
     this.score = score;
     this.hint = hint;
     this.won = won;
-    this.draw();
-  }
-
-  setHover(text: string | undefined): void {
-    this.hoverText = text;
     this.draw();
   }
 
@@ -229,6 +292,21 @@ export class IPad {
     ctx.fillText(`TARGET · ${page.eyebrow.toUpperCase()}`, pad, m(SHOT_TOP - 0.004));
     ctx.fillStyle = this.won ? '#4ade80' : '#ffffff';
     ctx.fillText(`YOUR SHOT · MATCH ${this.score}%`, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
+    this.rects = [];
+    // Size buttons in the top-right corner: make the iPad smaller or bigger.
+    const sz = m(0.014);
+    ['−', '+'].forEach((glyph, i) => {
+      const bx = W - pad - (2 - i) * sz - (1 - i) * m(0.004);
+      const by = m(SHOT_TOP - 0.004) - sz + m(0.002);
+      roundRect(ctx, bx, by, sz, sz, sz / 2);
+      ctx.fillStyle = '#26262b';
+      ctx.fill();
+      ctx.fillStyle = '#d4d4d8';
+      ctx.font = `bold ${m(0.011)}px system-ui, sans-serif`;
+      ctx.fillText(glyph, bx + (sz - ctx.measureText(glyph).width) / 2, by + sz / 2 + m(0.0038));
+      // A generous hit box: the visible circle plus a margin.
+      this.rects.push({ x: bx - m(0.002), y: by - m(0.003), w: sz + m(0.004), h: sz + m(0.006), control: { type: 'size', step: i === 0 ? -1 : 1 } });
+    });
 
     // Match bar under the shots.
     const barTop = m(SHOT_TOP + SHOT_H + 0.004);
@@ -238,13 +316,21 @@ export class IPad {
     ctx.fillStyle = this.won ? '#4ade80' : this.score >= 70 ? '#f5d90a' : '#f97316';
     ctx.fillRect(pad, barTop, (barW * this.score) / 100, m(0.004));
 
+    this.drawLightRow(ctx, m, pad);
+
     // The tip (or "Cut!"), with the button beside it when there is one.
     const textW = barW - (page.button ? m(SMALL_BUTTON.w + 0.01) : 0);
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${m(0.0112)}px system-ui, sans-serif`;
-    const headline = page.body || (this.won ? "CUT! That's the shot." : (this.hoverText ?? this.hint));
-    ctx.fillStyle = this.hoverText && !page.body && !this.won ? '#f5d90a' : '#ffffff';
-    const line = wrap(ctx, headline, textW)[0] ?? '';
+    const headline = page.body || (this.won ? "CUT! That's the shot." : this.hint);
+    // Long tips shrink to fit on the one line rather than getting cut off.
+    let tipSize = 0.0112;
+    while (ctx.measureText(headline).width > textW && tipSize > 0.0084) {
+      tipSize -= 0.0004;
+      ctx.font = `bold ${m(tipSize)}px system-ui, sans-serif`;
+    }
+    const lines = wrap(ctx, headline, textW);
+    const line = lines.length > 1 ? `${lines[0]}…` : (lines[0] ?? '');
     ctx.fillText(line, pad, m(SMALL_BUTTON_TOP + SMALL_BUTTON.h / 2 + 0.004));
     if (page.button) {
       const bw = m(SMALL_BUTTON.w);
@@ -258,9 +344,78 @@ export class IPad {
       ctx.font = `bold ${m(0.0102)}px system-ui, sans-serif`;
       const text = `${page.button}  ▶`;
       ctx.fillText(text, bx + (bw - ctx.measureText(text).width) / 2, by + bh / 2 + m(0.0035));
+      this.rects.push({ x: bx, y: by, w: bw, h: bh, control: { type: 'main' } });
     }
     this.texture.needsUpdate = true;
     this.refreshOverlay();
+  }
+
+  /**
+   * One switch per light along the row under the shots, each with a status
+   * LED and its name. A bi-color light's switch is wider and carries its
+   * color temperature dial: ◀ warmer, ▶ cooler.
+   */
+  private drawLightRow(ctx: CanvasRenderingContext2D, m: (n: number) => number, pad: number): void {
+    if (this.lights.length === 0) return;
+    const gap = m(0.004);
+    const units = this.lights.reduce((sum, l) => sum + (l.kelvin !== undefined ? 2 : 1), 0);
+    const unit = (W - 2 * pad - gap * (this.lights.length - 1)) / units;
+    const top = m(ROW_TOP);
+    const h = m(ROW_H);
+    let x = pad;
+    this.lights.forEach((light, index) => {
+      const dial = light.kelvin !== undefined;
+      const w = unit * (dial ? 2 : 1) + (dial ? gap : 0);
+      roundRect(ctx, x, top, w, h, m(0.005));
+      ctx.fillStyle = light.on ? '#2d2a14' : '#1c1c20';
+      ctx.fill();
+      ctx.lineWidth = m(index === this.highlight ? 0.0016 : 0.0008);
+      ctx.strokeStyle = index === this.highlight ? '#ffffff' : light.on ? '#f5d90a' : '#3f3f46';
+      ctx.stroke();
+      // Status LED: green when on.
+      ctx.beginPath();
+      ctx.arc(x + m(0.006), top + h / 2, m(0.0022), 0, Math.PI * 2);
+      ctx.fillStyle = light.on ? '#4ade80' : '#52525b';
+      ctx.fill();
+      const nameW = dial ? unit : w;
+      ctx.fillStyle = light.on ? '#fafafa' : '#a1a1aa';
+      let size = 0.0082;
+      ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+      while (ctx.measureText(light.label).width > nameW - m(0.013) && size > 0.0055) {
+        size -= 0.0004;
+        ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+      }
+      ctx.fillText(light.label, x + m(0.0105), top + h / 2 + m(size * 0.36));
+      this.rects.push({ x, y: top, w: nameW, h, control: { type: 'light', index } });
+      if (dial) {
+        // The dial: a warm-to-daylight gradient with a marker at the current setting.
+        const dx = x + unit + m(0.002);
+        const dw = w - unit - m(0.004);
+        const arrow = m(0.011);
+        const trackX = dx + arrow;
+        const trackW = dw - 2 * arrow;
+        const t = Math.min(1, Math.max(0, (light.kelvin! - KELVIN_MIN) / (KELVIN_MAX - KELVIN_MIN)));
+        const grad = ctx.createLinearGradient(trackX, 0, trackX + trackW, 0);
+        grad.addColorStop(0, '#ff9a45');
+        grad.addColorStop(0.5, '#ffe2b8');
+        grad.addColorStop(1, '#cfe3ff');
+        ctx.fillStyle = grad;
+        ctx.fillRect(trackX, top + h * 0.62, trackW, h * 0.14);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(trackX + trackW * t - m(0.0008), top + h * 0.54, m(0.0016), h * 0.3);
+        ctx.fillStyle = '#fafafa';
+        ctx.font = `bold ${m(0.0072)}px system-ui, sans-serif`;
+        const k = `${light.kelvin}K`;
+        ctx.fillText(k, trackX + (trackW - ctx.measureText(k).width) / 2, top + h * 0.46);
+        ctx.fillStyle = '#f5d90a';
+        ctx.font = `bold ${m(0.009)}px system-ui, sans-serif`;
+        ctx.fillText('◀', dx + m(0.001), top + h / 2 + m(0.003));
+        ctx.fillText('▶', dx + dw - arrow + m(0.002), top + h / 2 + m(0.003));
+        this.rects.push({ x: dx, y: top, w: dw / 2, h, control: { type: 'warmer', index } });
+        this.rects.push({ x: dx + dw / 2, y: top, w: dw / 2, h, control: { type: 'cooler', index } });
+      }
+      x += w + gap;
+    });
   }
 
   private drawFullPage(ctx: CanvasRenderingContext2D, m: (n: number) => number, pad: number): void {

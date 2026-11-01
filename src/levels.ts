@@ -1,4 +1,4 @@
-import type { FixtureKind, Gel } from './scene-assets/soundstage.scene-asset.js';
+import type { FixtureKind } from './scene-assets/soundstage.scene-asset.js';
 
 /**
  * The seven scenes of Lucky Break, as data. Each scene says which set pieces
@@ -22,7 +22,8 @@ export type SetId =
 
 export type KitItem = {
   kind: FixtureKind;
-  gel?: Gel;
+  /** A bi-color light: its color temperature dial (on the iPad) runs from warm 3200K to daylight 5600K. */
+  dial?: boolean;
   /** "screen" lights always point at the green screen instead of the cast. */
   aim?: 'cast' | 'screen';
 };
@@ -33,7 +34,8 @@ export type Role = {
   label: string;
   /** Which fixtures can fill it, and a plain-language reason for the hint. */
   kinds: FixtureKind[];
-  gel?: Gel;
+  /** Needs warm (tungsten, about 3200K) light: a bi-color light dialed down. */
+  warm?: boolean;
   aim?: 'cast' | 'screen';
   kindHint: string;
   /** Where it goes: an orbit around the aim point, or a fixed spot on the set. */
@@ -105,7 +107,7 @@ export const LEVELS: LevelDef[] = [
     objective: 'Kill the house lights. Then one soft key: 45° to the side, a bit above the eyes.',
     lesson: 'Soft key, 45° to the side, a little above the eyes. Flattering on anyone.',
     after: 'the director just squinted at you and said "stick around" 👀',
-    tip: 'Big square softbox = your key. Hit HOUSE first, then put it front-left of him, a little above his eyes.',
+    tip: 'Big square softbox = your key. Tap HOUSE on the iPad first, then put it front-left of him, a little above his eyes.',
   },
   {
     id: 'interview',
@@ -191,14 +193,14 @@ export const LEVELS: LevelDef[] = [
     actors: [{ pos: [-0.02, 0, -0.07] }],
     directorsChair: false,
     camera: { x: 0, z: 0.14, fov: 30 },
-    kit: [{ kind: 'softbox' }, { kind: 'fresnel' }, { kind: 'softbox', gel: 'cto' }, { kind: 'panel' }],
+    kit: [{ kind: 'softbox' }, { kind: 'fresnel' }, { kind: 'softbox', dial: true }, { kind: 'panel' }],
     roles: [
       {
         id: 'key',
         label: 'Key light',
         kinds: ['softbox'],
-        gel: 'cto',
-        kindHint: 'a soft source with an orange gel, to match the lamp',
+        warm: true,
+        kindHint: 'a soft source dialed warm (3200K), to match the lamp',
         orbit: { az: 45, el: 15, d: 0.15 },
       },
     ],
@@ -208,7 +210,7 @@ export const LEVELS: LevelDef[] = [
     objective: 'Switch on the lamp in the shot. Then light him from the lamp\'s side, in the lamp\'s warm color.',
     lesson: 'Motivated light: the key comes from where a real lamp in the scene would light him, in its color.',
     after: "uh oh. the real gaffer is back from lunch. he's just watching you. he looks scared",
-    tip: 'Click the lamp on first. Then the WARM softbox (orange gel) from the lamp\'s side, camera-right.',
+    tip: 'Lamp on first (tap it, or its button on the iPad). Then the bi-color softbox, dialed down to 3200K, from the lamp\'s side, camera-right.',
   },
   {
     id: 'interrogation',
@@ -241,14 +243,14 @@ export const LEVELS: LevelDef[] = [
     actors: [{ pos: [0.01, 0, -0.06], rotY: 0.25 }],
     directorsChair: false,
     camera: { x: -0.02, z: 0.14, fov: 26 },
-    kit: [{ kind: 'fresnel' }, { kind: 'panel' }, { kind: 'fresnel', gel: 'cto' }, { kind: 'softbox' }],
+    kit: [{ kind: 'fresnel' }, { kind: 'panel' }, { kind: 'fresnel', dial: true }, { kind: 'softbox' }],
     roles: [
       {
         id: 'sun',
         label: 'Sun',
         kinds: ['fresnel'],
-        gel: 'cto',
-        kindHint: 'a hard light with an orange gel (the sun is hard and warm)',
+        warm: true,
+        kindHint: 'a hard light dialed warm (3200K): the sun is hard and warm',
         orbit: { az: -130, el: 8, d: 0.2 },
       },
       {
@@ -262,9 +264,9 @@ export const LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Golden hour on a soundstage. Fake me a sunset."',
     objective: 'A low, warm, hard sun from behind him, and a soft fill on his face.',
-    lesson: 'Magic hour: a low warm backlight plus a gentle fill. Gels change the color of a light.',
+    lesson: 'Magic hour: a low warm backlight plus a gentle fill. Color temperature: low Kelvin is warm, high Kelvin is daylight blue.',
     after: '',
-    tip: 'Sun = the WARM Fresnel, low and behind him on camera-left. LED panel soft on his face from camera-right.',
+    tip: 'Sun = the bi-color Fresnel dialed to 3200K, low and behind him on camera-left. LED panel soft on his face from camera-right.',
     texts: [{ from: 'mom', text: 'Are you famous yet? 🎬❤️' }],
   },
   {
