@@ -19,6 +19,7 @@ import {
   createSlate,
   createTeeMark,
 } from './set-dressing.js';
+import { createCrewArea } from './crew.js';
 
 /**
  * Level 1 set: a tabletop black-box soundstage about 50 cm wide that sits on
@@ -162,6 +163,7 @@ export function createSoundstage(): Group {
 
   stage.add(createSubject(), createCineCamera());
   stage.add(...createSetDressing());
+  stage.add(...createCrewArea());
   return stage;
 }
 

@@ -75,6 +75,98 @@
             ],
             "scale": 0.0714286
           }
+        },
+        {
+          "id": "crew-director-model",
+          "name": "Crew: director (seated)",
+          "content": {
+            "type": "asset",
+            "asset": "crew-director",
+            "castShadow": true,
+            "receiveShadow": true
+          },
+          "transform": {
+            "position": [
+              -0.29,
+              0,
+              0.22
+            ],
+            "rotationDeg": [
+              0,
+              121.83,
+              0
+            ],
+            "scale": 0.0714286
+          }
+        },
+        {
+          "id": "crew-sponsor-model",
+          "name": "Crew: sponsor rep",
+          "content": {
+            "type": "asset",
+            "asset": "crew-sponsor",
+            "castShadow": true,
+            "receiveShadow": true
+          },
+          "transform": {
+            "position": [
+              -0.31,
+              0,
+              0.32
+            ],
+            "rotationDeg": [
+              0,
+              132.09,
+              0
+            ],
+            "scale": 0.0714286
+          }
+        },
+        {
+          "id": "crew-gaffer-model",
+          "name": "Crew: the real gaffer",
+          "content": {
+            "type": "asset",
+            "asset": "crew-gaffer",
+            "castShadow": true,
+            "receiveShadow": true
+          },
+          "transform": {
+            "position": [
+              0.29,
+              0,
+              0.23
+            ],
+            "rotationDeg": [
+              0,
+              -123.23,
+              0
+            ],
+            "scale": 0.0714286
+          }
+        },
+        {
+          "id": "crew-crafty-model",
+          "name": "Crew: craft services",
+          "content": {
+            "type": "asset",
+            "asset": "crew-crafty",
+            "castShadow": true,
+            "receiveShadow": true
+          },
+          "transform": {
+            "position": [
+              0.33,
+              0,
+              0.34
+            ],
+            "rotationDeg": [
+              0,
+              -132.27,
+              0
+            ],
+            "scale": 0.0714286
+          }
         }
       ]
     },
