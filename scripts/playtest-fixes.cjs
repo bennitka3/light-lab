@@ -35,7 +35,7 @@ const { chromium } = require('playwright');
   const button = await at('card-button');
   await page.mouse.click(button.x, button.y);
   await wait(500);
-  check('lower-third button starts scene 1', (await state()).phase === 'playing');
+  check('iPad Go button starts scene 1', (await state()).phase === 'playing');
   await wait(5000);
   const texts = await api(() => window.lightLab.texts());
   check('Dee texts the intro and a tip', texts.length >= 3 && texts[0].startsWith('dee:'), texts);
@@ -55,7 +55,7 @@ const { chromium } = require('playwright');
   for (let i = 0; i < 7; i++) {
     await api((n) => window.lightLab.loadLevel(n), i);
     await api(() => window.lightLab.solve());
-    await wait(300);
+    await wait(1200);
     const s = await state();
     await wait(2500);
     const after = await state();
@@ -117,8 +117,45 @@ const { chromium } = require('playwright');
   const s2b = await state();
   check('scene 2: fixing the key wins', s2b.phase === 'won', s2b);
   await page.screenshot({ path: `${out}/08-scene2-won.png` });
-  const card = await api(() => window.lightLab.card());
-  check('win line comes from the director pool', card.title.startsWith('"'), card.title);
+  const line = await api(() => window.lightLab.bubble());
+  check('win line comes from the director, on set', typeof line === 'string' && line.startsWith('"'), line);
+
+  // Round 2. 6. Hints for lights behind the cast say plain moves, not "swing".
+  await api(() => window.lightLab.loadLevel(6));
+  await api(() => window.lightLab.solve());
+  const back7 = await api(() => window.lightLab.fixtures().findIndex((f) => f.on && (f.item.kind === 'par' || f.item.kind === 'fresnel')));
+  // Where ben had it: low, right behind the table.
+  await api((i) => window.lightLab.placeAt(i, 0.0, 0.06, -0.12), back7);
+  await wait(600);
+  const h1 = (await state()).hint;
+  await api((i) => window.lightLab.placeAt(i, -0.06, 0.2, -0.14), back7);
+  await wait(600);
+  const h2 = (await state()).hint;
+  check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /camera-right|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
+
+  // 7. The director's lines come from the set; Mom arrives as a banner, not in Dee's chat.
+  await api(() => window.lightLab.loadLevel(5));
+  await wait(300);
+  check('director says the scene quote in a speech bubble', /Golden hour/.test((await api(() => window.lightLab.bubble())) || ''), await api(() => window.lightLab.bubble()));
+  await api(() => window.lightLab.solve());
+  await wait(4500);
+  await page.screenshot({ path: `${out}/09-mom-banner.png` });
+  const t2 = await api(() => window.lightLab.texts());
+  check('Mom texts as a notification', t2.some((t) => t.startsWith('mom:')), t2.slice(-3));
+  const winsNoRealGuy = await api(() => true);
+  check('Dee win lines never say "real guy"', winsNoRealGuy && !t2.some((t) => /real guy/.test(t)));
+
+  // 8. The phone tucks down when nothing is happening, and comes back on hover.
+  await wait(9000);
+  const tucked = !(await api(() => window.lightLab.phoneAwake()));
+  const ph = await at('phone');
+  await page.mouse.move(ph.x, 712);
+  await wait(300);
+  const awakeOnHover = await api(() => window.lightLab.phoneAwake());
+  check('phone tucks away when idle and wakes on hover', tucked && awakeOnHover, { tucked, awakeOnHover });
+  await wait(800);
+  await page.screenshot({ path: `${out}/10-phone-hover.png` });
+  await page.mouse.move(5, 5);
 
   console.log('errors', errors.length ? errors : 'none');
   const failed = Object.entries(results).filter(([, ok]) => !ok);

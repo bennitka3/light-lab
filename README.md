@@ -63,6 +63,8 @@ GitHub Pages (`.github/workflows/pages.yml`).
 - `src/levels.ts`: the seven scenes as data (cast, kit, the roles lights must fill, story text).
 - `src/scene-assets/level-sets.ts`: each scene's set pieces (bookshelf, perfume bottle, lamp, green screen...).
 - `src/lighting-level.ts`: the game: scene flow, lights, house switch, monitor, scoring, hints, controls.
-- `src/story-card.ts`: the call sheet card.
+- `src/ipad-hud.ts`: the iPad in the middle of the view (target vs your shot, how to play).
+- `src/phone-hud.ts`: the phone with Dee's texts and notification banners.
+- `src/speech-bubble.ts`: the director's lines, floating over the director on set.
 - `docs/LEARNINGS.md`: what building this taught us.
 - `public/scenes/main.iwsdk.scene.json`: where everything sits in the scene.

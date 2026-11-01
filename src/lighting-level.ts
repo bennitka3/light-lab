@@ -1,4 +1,5 @@
 import {
+  AssetManager,
   BoxGeometry,
   CanvasTexture,
   Color,
@@ -46,7 +47,8 @@ import {
   STAGE_HEIGHT,
   STAGE_WIDTH,
 } from './scene-assets/soundstage.scene-asset.js';
-import { CARD_BUTTON_CENTER, CARD_HEIGHT, CARD_WIDTH, type CardContent, StoryCard, wrap } from './story-card.js';
+import { IPAD_BUTTON_CENTER, IPAD_HEIGHT, IPAD_WIDTH, IPad, type IPadPage } from './ipad-hud.js';
+import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
 
 /**
  * Runs Lucky Break: seven lighting scenes on one tabletop soundstage, and the
@@ -69,8 +71,6 @@ import { CARD_BUTTON_CENTER, CARD_HEIGHT, CARD_WIDTH, type CardContent, StoryCar
  * dragging empty space turns the view around the set.
  */
 
-const MONITOR_W = 0.24;
-const MONITOR_H = 0.135;
 const SHOT_W = 512;
 const SHOT_H = 288;
 const WIN_HOLD_SECONDS = 0.8;
@@ -99,8 +99,9 @@ const HANG_HEIGHT = 0.17;
 const IN_FRAME_TEXT_SECONDS = 1.2;
 const NUDGE_SECONDS = 14;
 // Where the lower third and the phone ride in front of the headset view (meters, head space).
-const HUD_CARD_OFFSET = new Vector3(0, -0.2, -0.7);
-const HUD_PHONE_OFFSET = new Vector3(0.3, -0.17, -0.62);
+const HUD_IPAD_OFFSET = new Vector3(0, -0.21, -0.6);
+const HUD_IPAD_FULL_OFFSET = new Vector3(0, -0.04, -0.55);
+const HUD_PHONE_OFFSET = new Vector3(0.24, -0.2, -0.56);
 const HUD_DESKTOP_DISTANCE = 0.6;
 
 type Pose = { azimuth: number; elevation: number; distance: number };
@@ -234,7 +235,10 @@ export class LightingLevelSystem extends createSystem({
 
   // House lights and switches.
   private houseOn = true;
-  private houseLights: Object3D[] = [];
+  // House lights are dimmed to zero rather than hidden: hiding a light changes the
+  // light count, which makes three.js recompile every material (a visible stall).
+  private houseLights: (HemisphereLight | DirectionalLight)[] = [];
+  private houseIntensity: number[] = [];
   private houseLed!: MeshStandardMaterial;
   private switches: Switch[] = [];
   private houseSwitch!: Switch;
@@ -244,8 +248,7 @@ export class LightingLevelSystem extends createSystem({
   private shotTarget!: WebGLRenderTarget;
   private targetShot!: WebGLRenderTarget;
   private framesSinceLoad = 0;
-  private monitor!: Group;
-  private liveMaterial!: MeshBasicMaterial;
+  private ipad!: IPad;
   private label!: { canvas: HTMLCanvasElement; texture: CanvasTexture };
   private shownText = '';
   private holdTime = 0;
@@ -253,11 +256,19 @@ export class LightingLevelSystem extends createSystem({
   private creatureHold = 0;
 
   // The lower third, the phone, and the hover label.
-  private card = new StoryCard();
-  private cardEntity!: Entity;
-  private cardPressed = false;
+  private ipadEntity!: Entity;
+  private ipadPressed = false;
+  private phoneEntity!: Entity;
+  private bubble = new SpeechBubble();
+  private director?: { anchor: Object3D; placeholder?: Object3D };
+  private lastDeeWin = -1;
   private phone = new PhoneHud();
   private hudPlaced = false;
+  private xrPlaced = false;
+  private hudScale = 1;
+  private hudY = 0;
+  private phoneTuck = 0;
+  private mouseOnPhone = false;
   private hoverTag!: { mesh: Mesh; canvas: HTMLCanvasElement; texture: CanvasTexture; shown?: Fixture };
   private mouseHover: Fixture | null = null;
   private lastDirectorLine = -1;
@@ -315,7 +326,7 @@ export class LightingLevelSystem extends createSystem({
     const onWheel = (event: WheelEvent) => this.onWheel(event);
     const onContextMenu = (event: Event) => event.preventDefault();
     const onKey = (event: KeyboardEvent) => {
-      if ((event.key === 'Enter' || event.key === ' ') && this.ready && this.card.hasButton) {
+      if ((event.key === 'Enter' || event.key === ' ') && this.ready && this.ipad.hasButton) {
         event.preventDefault();
         this.pressCard();
       }
@@ -340,10 +351,11 @@ export class LightingLevelSystem extends createSystem({
       for (const sw of this.switches) {
         sw.entity.dispose();
       }
-      this.cardEntity?.dispose();
-      this.phone.mesh.removeFromParent();
+      this.ipadEntity?.dispose();
+      this.phoneEntity?.dispose();
+      this.bubble.mesh.removeFromParent();
+      this.director?.placeholder?.removeFromParent();
       this.hoverTag?.mesh.removeFromParent();
-      this.monitor?.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
     });
@@ -395,9 +407,9 @@ export class LightingLevelSystem extends createSystem({
     }
     this.errorShown = true;
     console.error('[LightingLevel]', error);
-    if (this.label) {
+    if (this.ipad) {
       const message = error instanceof Error ? error.message : String(error);
-      this.drawLabel(0, 'MONITOR ERROR (send ben a screenshot)', message.slice(0, 70));
+      this.ipad.setStatus(0, `ERROR (send ben a screenshot): ${message.slice(0, 70)}`, false);
     }
   }
 
@@ -461,7 +473,9 @@ export class LightingLevelSystem extends createSystem({
           togglePractical: () => this.practical?.switch.toggle(),
           creature: () => this.creature.played,
           texts: () => this.phone.log.map((t) => `${t.from}: ${t.text}`),
-          card: () => this.card.content,
+          card: () => this.ipad.page,
+          bubble: () => (this.bubble.mesh.visible ? this.bubble.line : null),
+          phoneAwake: () => this.phone.awake,
           inFrame: () => this.framedFixture()?.item.kind ?? null,
           // Moves fixture i to an orbit pose around the aim point (for tests).
           place: (i: number, az: number, el: number, d: number) => {
@@ -478,7 +492,7 @@ export class LightingLevelSystem extends createSystem({
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
             const camera = this.world.camera;
-            const card = camera.worldToLocal(this.card.mesh.getWorldPosition(new Vector3()));
+            const card = camera.worldToLocal(this.ipad.object.getWorldPosition(new Vector3()));
             const phone = camera.worldToLocal(this.phone.mesh.getWorldPosition(new Vector3()));
             return { immersive: this.immersive, card: card.toArray(), phone: phone.toArray(), phoneVisible: this.phone.mesh.visible };
           },
@@ -487,8 +501,10 @@ export class LightingLevelSystem extends createSystem({
           screenOf: (what: string | number) => {
             const v = new Vector3();
             if (what === 'card' || what === 'card-button') {
-              v.set(what === 'card' ? 0 : CARD_BUTTON_CENTER.x, what === 'card' ? 0 : CARD_BUTTON_CENTER.y, 0);
-              this.card.mesh.localToWorld(v);
+              v.set(what === 'card' ? 0 : IPAD_BUTTON_CENTER.x, what === 'card' ? 0 : IPAD_BUTTON_CENTER.y, 0);
+              this.ipad.object.localToWorld(v);
+            } else if (what === 'phone') {
+              this.phone.mesh.getWorldPosition(v);
             } else if (what === 'house') {
               this.houseSwitch.hit.getWorldPosition(v);
             } else if (what === 'lamp' && this.practical) {
@@ -543,8 +559,16 @@ export class LightingLevelSystem extends createSystem({
         this.actor.position.set(...first.pos);
         this.actor.rotation.set(0, first.rotY ?? 0, 0);
       }
+      // The second seat goes to the actress (asset "actress", once loaded), else a copy of the actor.
+      let actress: Object3D | undefined;
+      try {
+        actress = AssetManager.getGLTF('actress')?.scene;
+      } catch {
+        actress = undefined;
+      }
       for (const extra of level.actors.slice(1)) {
-        const clone = this.actor.clone(true);
+        const clone = (actress ?? this.actor).clone(true);
+        if (actress) clone.scale.copy(this.actor.scale);
         clone.position.set(...extra.pos);
         clone.rotation.set(0, extra.rotY ?? 0, 0);
         clone.visible = true;
@@ -689,7 +713,7 @@ export class LightingLevelSystem extends createSystem({
 
   /** Moves the story on: the title starts scene 1, a won scene goes to the next one. */
   private pressCard(): void {
-    if (!this.card.hasButton) {
+    if (!this.ipad.hasButton) {
       return;
     }
     devLog(`card pressed in phase ${this.phase}, scene ${this.levelIndex + 1}`);
@@ -724,16 +748,16 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
-  /** Shows content in the lower third; it only catches rays and clicks while it has a button. */
-  private showCard(content: CardContent): void {
-    this.card.show(content);
-    if (!this.cardEntity) {
+  /** Shows a page on the iPad; it only catches rays and clicks while it has a button. */
+  private showPage(page: IPadPage): void {
+    this.ipad.show(page);
+    if (!this.ipadEntity) {
       return;
     }
-    if (content.button && !this.cardEntity.hasComponent(RayInteractable)) {
-      this.cardEntity.addComponent(RayInteractable);
-    } else if (!content.button && this.cardEntity.hasComponent(RayInteractable)) {
-      this.cardEntity.removeComponent(RayInteractable);
+    if (page.button && !this.ipadEntity.hasComponent(RayInteractable)) {
+      this.ipadEntity.addComponent(RayInteractable);
+    } else if (!page.button && this.ipadEntity.hasComponent(RayInteractable)) {
+      this.ipadEntity.removeComponent(RayInteractable);
     }
   }
 
@@ -746,35 +770,66 @@ export class LightingLevelSystem extends createSystem({
     return DIRECTOR_WINS[i];
   }
 
+  private pickDeeWin(): string {
+    let i = Math.floor(Math.random() * DEE_WINS.length);
+    if (i === this.lastDeeWin) {
+      i = (i + 1) % DEE_WINS.length;
+    }
+    this.lastDeeWin = i;
+    return DEE_WINS[i];
+  }
+
+  /** The director says a line from beside the set. */
+  private say(line: string, hold = false): void {
+    devLog(`director says ${line}`);
+    this.bubble.say('Director', line, hold);
+  }
+
   private showTitleCard(): void {
-    this.showCard({
-      eyebrow: 'Lucky Break',
+    this.bubble.hide();
+    const headset = this.immersive;
+    this.showPage({
+      full: true,
+      eyebrow: 'Lucky Break · How to play',
       title: 'Twelve years as Background Extra #47.',
-      body: "Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.",
+      body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
+      steps: headset
+        ? [
+            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
+            'Point at a light and quick-pinch to switch it on or off.',
+            'Pinch and hold a light to move it. Point at things to see their names.',
+            'The director talks from the set. Dee texts you tips.',
+          ]
+        : [
+            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
+            'Click a light to switch it on or off. Drag it to move it.',
+            'Shift-drag (or scroll while dragging) to raise it. Hover for its name.',
+            'Drag empty space to turn the set. Dee texts you tips.',
+          ],
       footer: 'Seven scenes. One soundstage. Zero qualifications.',
-      button: 'Get to work',
+      button: 'Go',
     });
   }
 
   private showBriefCard(): void {
     const level = this.level;
-    this.showCard({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title} · Director`,
-      title: level.quote,
+    this.showPage({
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${level.title}`,
       body: level.objective,
       footer: `Kit: ${level.kit.map(itemName).join(', ')}.`,
     });
+    this.say(level.quote);
   }
 
   private showWinCard(): void {
     const last = this.levelIndex === LEVELS.length - 1;
-    this.showCard({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · Cut!`,
-      title: last ? '"Okay. Okay. Everybody quiet. Roll it."' : this.pickDirectorLine(),
+    this.showPage({
+      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length} · ${this.level.title} · Cut!`,
       body: this.level.lesson,
       footer: this.level.after || undefined,
       button: last ? 'Roll!' : 'Next scene',
     });
+    this.say(last ? '"Okay. Okay. Everybody quiet. Roll it."' : this.pickDirectorLine(), true);
   }
 
   private rollFinale(): void {
@@ -789,10 +844,10 @@ export class LightingLevelSystem extends createSystem({
       });
     }
     this.renderTargetShot();
-    this.drawLabel(100, 'DIRECTOR: "Is that... Lake Como? I\'m crying."', '"WHO ARE YOU?"');
-    this.showCard({
+    this.ipad.setStatus(100, '', true);
+    this.say('"Is that... Lake Como? I\'m crying. Who ARE you?"', true);
+    this.showPage({
       eyebrow: 'Rolling · Final scene',
-      title: '"Is that Lake Como? I\'m crying. Who ARE you?"',
       body: 'The green screen is gone. The couple is on a terrace above the lake at sunset, and the light on their faces matches it.',
       footer: 'Background Extra #47, would you come to the front, please.',
       button: 'Take a bow',
@@ -800,7 +855,9 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private showCredits(): void {
-    this.showCard({
+    this.bubble.hide();
+    this.showPage({
+      full: true,
       eyebrow: "That's a wrap",
       title: 'LUCKY BREAK',
       body: 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
@@ -877,20 +934,24 @@ export class LightingLevelSystem extends createSystem({
       }
       sw.pressed = pressed;
     }
-    const cardPressed = this.immersive && this.cardEntity.hasComponent(Pressed);
-    if (cardPressed && !this.cardPressed) {
+    const ipadPressed = this.immersive && this.ipadEntity.hasComponent(Pressed);
+    if (ipadPressed && !this.ipadPressed) {
       this.pressCard();
     }
-    this.cardPressed = cardPressed;
+    this.ipadPressed = ipadPressed;
 
-    for (const light of this.houseLights) {
-      light.visible = this.houseOn;
-    }
+    this.setHouseLights(this.houseOn);
     this.houseLed.emissive.set(this.houseOn ? '#4ade80' : '#3a1010');
     if (this.practical) {
       this.practical.shade.emissiveIntensity = this.practical.on ? 1.4 : 0;
       this.practical.bulb.intensity = this.practical.on ? 0.06 : 0;
     }
+  }
+
+  private setHouseLights(on: boolean): void {
+    this.houseLights.forEach((light, i) => {
+      light.intensity = on ? this.houseIntensity[i] : 0;
+    });
   }
 
   private resetHold(): void {
@@ -1046,8 +1107,9 @@ export class LightingLevelSystem extends createSystem({
     const previousTarget = renderer.getRenderTarget();
     const xrEnabled = renderer.xr.enabled;
     renderer.xr.enabled = false;
-    this.monitor.visible = false;
-    this.card.mesh.visible = false;
+    this.ipad.object.visible = false;
+    const bubbleVisible = this.bubble.mesh.visible;
+    this.bubble.mesh.visible = false;
     const phoneVisible = this.phone.mesh.visible;
     this.phone.mesh.visible = false;
     const tagVisible = this.hoverTag.mesh.visible;
@@ -1071,10 +1133,10 @@ export class LightingLevelSystem extends createSystem({
         }
       }
       this.cameraRig.visible = true;
-      this.card.mesh.visible = true;
+      this.bubble.mesh.visible = bubbleVisible;
       this.phone.mesh.visible = phoneVisible;
       this.hoverTag.mesh.visible = tagVisible;
-      this.monitor.visible = true;
+      this.ipad.object.visible = true;
       renderer.xr.enabled = xrEnabled;
     }
   }
@@ -1084,9 +1146,7 @@ export class LightingLevelSystem extends createSystem({
     for (const fixture of this.fixtures) {
       fixture.spot.visible = false;
     }
-    for (const light of this.houseLights) {
-      light.visible = false;
-    }
+    this.setHouseLights(false);
     const practicalWasOn = this.practical?.on ?? false;
     if (this.practical) {
       this.practical.bulb.intensity = 0.06;
@@ -1110,9 +1170,7 @@ export class LightingLevelSystem extends createSystem({
       for (const fixture of this.fixtures) {
         fixture.spot.visible = fixture.on;
       }
-      for (const light of this.houseLights) {
-        light.visible = this.houseOn;
-      }
+      this.setHouseLights(this.houseOn);
       if (this.practical) {
         this.practical.bulb.intensity = practicalWasOn ? 0.06 : 0;
         this.practical.shade.emissiveIntensity = practicalWasOn ? 1.4 : 0;
@@ -1281,17 +1339,25 @@ export class LightingLevelSystem extends createSystem({
     if (tAz + tEl + tD < 0.05) {
       return 'Almost there. Hold it...';
     }
-    if (tAz >= tEl && tAz >= tD) {
-      const behind = Math.abs(az) > 100;
-      if (behind && Math.abs(pose.azimuth) < 90) {
-        return `The ${lower} belongs behind the cast. Move it round the back.`;
+    const target = this.roleLocal(role, this.v2);
+    if (tEl > tAz && tEl > tD) {
+      if (dEl < 0 && target.y >= HANG_HEIGHT && fixture.local.y < HANG_HEIGHT) {
+        return `Raise the ${lower} until it hangs from the grid.`;
       }
-      return dAz > 0 ? `Swing the ${lower} toward camera-left.` : `Swing the ${lower} toward camera-right.`;
-    }
-    if (tEl >= tD) {
       return dEl < 0 ? `Raise the ${lower}.` : `Lower the ${lower}.`;
     }
-    return ratio > 1 ? `Bring the ${lower} closer.` : `Pull the ${lower} back a bit.`;
+    // Direction and distance errors: say which way to move it across the floor,
+    // in set terms (camera-left/right, back toward the wall, forward toward the camera).
+    const behindCast = target.z < this.aimLocal.z - 0.02;
+    if (behindCast && fixture.local.z > this.aimLocal.z) {
+      return `The ${lower} belongs behind the cast. Move it round the back.`;
+    }
+    const dx = target.x - fixture.local.x;
+    const dz = target.z - fixture.local.z;
+    if (Math.abs(dx) >= Math.abs(dz)) {
+      return dx < 0 ? `Move the ${lower} toward camera-left.` : `Move the ${lower} toward camera-right.`;
+    }
+    return dz < 0 ? `Move the ${lower} back, away from the camera.` : `Move the ${lower} forward, toward the camera.`;
   }
 
   private updateScore(delta: number): void {
@@ -1304,9 +1370,9 @@ export class LightingLevelSystem extends createSystem({
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
       this.chime.play().catch(() => undefined);
-      this.drawLabel(score, `CUT! MATCH ${score}%`, this.level.lesson);
+      this.ipad.setStatus(score, '', true);
       this.showWinCard();
-      this.phone.text('dee', DEE_WINS[Math.floor(Math.random() * DEE_WINS.length)]);
+      this.phone.text('dee', this.pickDeeWin());
       for (const text of this.level.texts ?? []) {
         this.phone.text(text.from, text.text);
       }
@@ -1316,7 +1382,7 @@ export class LightingLevelSystem extends createSystem({
     const text = `${score}|${hint}|${this.creature.active}`;
     if (text !== this.shownText) {
       this.shownText = text;
-      this.drawLabel(score, `MATCH ${score}%`, hint);
+      this.ipad.setStatus(score, hint, false);
     }
   }
 
@@ -1365,142 +1431,130 @@ export class LightingLevelSystem extends createSystem({
     this.creatureHold = monster ? this.creatureHold + delta : 0;
     if (this.creatureHold > 1.5) {
       this.creature.play();
+      this.say('"...Universal is on line two."');
       this.shownText = '';
     }
   }
 
-  // --- Monitor and card ------------------------------------------------------
+  // --- iPad, phone and speech bubble -------------------------------------------
 
   private buildMonitor(): void {
-    this.monitor = new Group();
-    this.monitor.name = 'camera-monitor';
-    const frame = new Mesh(
-      new BoxGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075, 0.008),
-      new MeshBasicMaterial({ color: '#0b0b0d' }),
-    );
-    frame.position.set(0, 0.0, -0.005);
-    const targetPlane = new Mesh(
-      new PlaneGeometry(MONITOR_W, MONITOR_H),
-      new MeshBasicMaterial({ map: this.targetShot.texture, toneMapped: false }),
-    );
-    targetPlane.name = 'monitor-target';
-    targetPlane.position.set(0, MONITOR_H / 2 + 0.022, 0);
-    this.liveMaterial = new MeshBasicMaterial({ map: this.shotTarget.texture, toneMapped: false });
-    this.creature.install(this.liveMaterial);
-    const livePlane = new Mesh(new PlaneGeometry(MONITOR_W, MONITOR_H), this.liveMaterial);
-    livePlane.name = 'monitor-live';
-    livePlane.position.set(0, -MONITOR_H / 2 + 0.002, 0);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const texture = new CanvasTexture(canvas);
-    texture.colorSpace = SRGBColorSpace;
-    this.label = { canvas, texture };
-    const overlay = new Mesh(
-      new PlaneGeometry(MONITOR_W + 0.02, MONITOR_H * 2 + 0.075),
-      new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
-    );
-    overlay.name = 'monitor-labels';
-    overlay.position.z = 0.0005;
-
-    this.monitor.add(frame, targetPlane, livePlane, overlay);
-    // Beside the stage, on the camera's side, angled toward the player.
-    this.monitor.position.set(0.43, 0.16, 0.08);
-    this.monitor.rotation.y = -0.35;
-    this.stage.add(this.monitor);
-  }
-
-  private drawLabel(score: number, line1: string, line2: string): void {
-    const { canvas, texture } = this.label;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
-    }
-    // The canvas maps onto the whole monitor face.
-    const sx = canvas.width / (MONITOR_W + 0.02);
-    const sy = canvas.height / (MONITOR_H * 2 + 0.075);
-    const toY = (metersFromTop: number) => metersFromTop * sy;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = 'bold 34px system-ui, sans-serif';
-    ctx.fillStyle = '#f5d90a';
-    ctx.fillText('TARGET', 0.012 * sx, toY(0.014));
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('YOUR SHOT', 0.012 * sx, toY(0.0145 + MONITOR_H + 0.012));
-    if (this.creature.active) {
-      this.creature.drawTitle(ctx, 0.01 * sx, toY(0.0145 + MONITOR_H + 0.02), MONITOR_W * sx, MONITOR_H * sy);
-      line1 = 'DIRECTOR: "...Universal is on line two."';
-    }
-
-    const barTop = toY(0.03 + MONITOR_H * 2);
-    const barWidth = canvas.width - 0.024 * sx;
-    const won = this.phase !== 'playing' && this.phase !== 'title';
-    ctx.fillStyle = '#2b2b30';
-    ctx.fillRect(0.012 * sx, barTop, barWidth, 30);
-    ctx.fillStyle = won ? '#4ade80' : score >= 70 ? '#f5d90a' : '#f97316';
-    ctx.fillRect(0.012 * sx, barTop, (barWidth * score) / 100, 30);
-    ctx.font = 'bold 40px system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(line1, 0.012 * sx, barTop + 78);
-    ctx.font = '30px system-ui, sans-serif';
-    ctx.fillStyle = '#d4d4d8';
-    const lines = wrap(ctx, line2, barWidth);
-    lines.slice(0, 2).forEach((line, i) => ctx.fillText(line, 0.012 * sx, barTop + 122 + i * 36));
-    texture.needsUpdate = true;
+    this.ipad = new IPad(this.targetShot.texture, this.shotTarget.texture);
+    this.creature.install(this.ipad.liveMaterial);
+    this.ipad.overLive = (ctx, x, y, w, h) => {
+      if (!this.creature.active) return false;
+      this.creature.drawTitle(ctx, x, y, w, h);
+      return true;
+    };
   }
 
   private buildCard(): void {
-    // The lower third and the phone are placed in front of the view every frame (placeHud).
-    this.cardEntity = this.world.createTransformEntity(this.card.mesh);
-    this.showCard(this.card.content);
-    this.world.scene.add(this.phone.mesh);
+    // The iPad and the phone are placed in front of the view every frame (placeHud).
+    this.ipadEntity = this.world.createTransformEntity(this.ipad.object);
+    this.showPage(this.ipad.page);
+    this.phoneEntity = this.world.createTransformEntity(this.phone.mesh);
+    this.phoneEntity.addComponent(RayInteractable);
+    this.world.scene.add(this.bubble.mesh);
+    this.buildDirector();
   }
 
   /**
-   * Keeps the lower third and the phone at the bottom of the view. In the
-   * browser they are fixed to the screen (the view orbits with the mouse);
-   * in the headset they drift after your head so they never feel bolted on.
+   * Where the director sits: the "crew-director" spot on the stage (the art
+   * pass puts a person there). Until a model is there, an empty director's
+   * chair stands in for them.
+   */
+  private buildDirector(): void {
+    let anchor = this.stage.getObjectByName('crew-director');
+    // The art pass builds the director, his chair and the crew next to their anchors.
+    const hasDirector = Boolean(anchor);
+    if (!anchor) {
+      anchor = new Object3D();
+      anchor.name = 'crew-director';
+      anchor.position.set(-0.2, 0, 0.19);
+      anchor.rotation.y = Math.atan2(0 - -0.2, -0.06 - 0.19);
+      this.stage.add(anchor);
+    }
+    let placeholder: Object3D | undefined;
+    if (!hasDirector && this.directorsChair) {
+      placeholder = this.directorsChair.clone(true);
+      placeholder.name = 'director-chair-placeholder';
+      placeholder.position.set(0, 0, 0);
+      placeholder.rotation.set(0, 0, 0);
+      placeholder.visible = true;
+      anchor.add(placeholder);
+    }
+    this.director = { anchor, placeholder };
+  }
+
+  /**
+   * Keeps the iPad, the phone and the director's speech bubble in view. In
+   * the browser the iPad and phone are fixed to the screen (the view orbits
+   * with the mouse); in the headset they drift after your head so they never
+   * feel bolted on. The iPad starts big in the middle with how to play, then
+   * settles at the bottom. The phone sits beside it and tucks down when
+   * nothing new is happening.
    */
   private placeHud(delta: number): void {
     const camera = this.world.camera;
     camera.updateMatrixWorld();
     camera.getWorldPosition(this.headWorld);
-    const card = this.card.mesh;
+    const ipad = this.ipad.object;
     const phone = this.phone.mesh;
-    const bounce = Math.sin(this.phone.pop * Math.PI) * 0.012;
+    this.phone.hovered = this.immersive ? this.phoneEntity.hasComponent(Hovered) : this.mouseOnPhone;
+    const bounce = Math.sin(this.phone.pop * Math.PI) * 0.01;
+    const ease = 1 - Math.exp(-delta * 6);
+    this.phoneTuck += ((this.phone.awake ? 0 : 1) - this.phoneTuck) * ease;
+    const full = this.ipad.isFull;
     if (!this.immersive) {
-      // Fit both into the bottom of the browser window.
       const d = HUD_DESKTOP_DISTANCE;
       const halfH = d * Math.tan(MathUtils.degToRad(camera.fov / 2));
       const halfW = halfH * camera.aspect;
-      const margin = halfH * 0.05;
-      const phoneScale = Math.min(1, (halfH * 0.6) / PHONE_HEIGHT);
-      const phoneW = PHONE_WIDTH * phoneScale;
-      const cardScale = Math.min(0.85, (halfW * 2 - 2 * (phoneW + 2 * margin)) / CARD_WIDTH);
-      card.scale.setScalar(cardScale);
+      const margin = halfH * 0.04;
+      // Play: the iPad takes about 40% of the window height at the bottom; full page: most of it, centered.
+      const fit = Math.min((halfH * (full ? 1.6 : 0.74)) / IPAD_HEIGHT, (halfW * (full ? 1.7 : 1.2)) / IPAD_WIDTH);
+      const ipadScale = this.hudScale + (fit - this.hudScale) * (this.hudPlaced ? ease : 1);
+      this.hudScale = ipadScale;
+      const ipadH = IPAD_HEIGHT * ipadScale;
+      const ipadW = IPAD_WIDTH * ipadScale;
+      const playY = -halfH + margin + ipadH / 2;
+      const ipadY = full ? 0 : playY;
+      this.hudY = this.hudPlaced ? this.hudY + (ipadY - this.hudY) * ease : ipadY;
+      this.hudPlaced = true;
+      ipad.scale.setScalar(ipadScale);
+      this.hudTarget.set(0, this.hudY, -d);
+      ipad.position.copy(camera.localToWorld(this.hudTarget));
+      ipad.quaternion.copy(camera.getWorldQuaternion(ipad.quaternion));
+      // The phone stands just right of the iPad, about as tall, and slides down when idle.
+      const phoneScale = Math.min((halfH * 0.85) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH);
+      const phoneH = PHONE_HEIGHT * phoneScale;
       phone.scale.setScalar(phoneScale);
-      this.hudTarget.set(0, -halfH + margin + (CARD_HEIGHT * cardScale) / 2, -d);
-      card.position.copy(camera.localToWorld(this.hudTarget));
-      card.quaternion.copy(camera.getWorldQuaternion(card.quaternion));
-      this.hudTarget.set(halfW - margin - phoneW / 2, -halfH + margin + (PHONE_HEIGHT * phoneScale) / 2 + bounce, -d + 0.001);
+      const phoneX = Math.min(ipadW / 2 + margin + (PHONE_WIDTH * phoneScale) / 2, halfW - margin - (PHONE_WIDTH * phoneScale) / 2);
+      const phoneY = -halfH + margin + phoneH / 2 - this.phoneTuck * phoneH * 0.8 + bounce;
+      this.hudTarget.set(phoneX, phoneY, -d + 0.001);
       phone.position.copy(camera.localToWorld(this.hudTarget));
-      phone.quaternion.copy(card.quaternion);
-      this.hudPlaced = false;
-      return;
+      phone.quaternion.copy(ipad.quaternion);
+    } else {
+      ipad.scale.setScalar(full ? 1 : 0.75);
+      phone.scale.setScalar(1);
+      const follow = this.xrPlaced ? 1 - Math.exp(-delta * 3) : 1;
+      this.xrPlaced = true;
+      this.hudTarget.copy(full ? HUD_IPAD_FULL_OFFSET : HUD_IPAD_OFFSET);
+      camera.localToWorld(this.hudTarget);
+      ipad.position.lerp(this.hudTarget, follow);
+      ipad.lookAt(this.headWorld);
+      this.hudTarget.copy(HUD_PHONE_OFFSET);
+      this.hudTarget.y += bounce - this.phoneTuck * 0.11;
+      camera.localToWorld(this.hudTarget);
+      phone.position.lerp(this.hudTarget, follow);
+      phone.lookAt(this.headWorld);
     }
-    card.scale.setScalar(1);
-    phone.scale.setScalar(1);
-    const follow = this.hudPlaced ? 1 - Math.exp(-delta * 3) : 1;
-    this.hudPlaced = true;
-    this.hudTarget.copy(HUD_CARD_OFFSET);
-    camera.localToWorld(this.hudTarget);
-    card.position.lerp(this.hudTarget, follow);
-    card.lookAt(this.headWorld);
-    this.hudTarget.copy(HUD_PHONE_OFFSET);
-    this.hudTarget.y += bounce;
-    camera.localToWorld(this.hudTarget);
-    phone.position.lerp(this.hudTarget, follow);
-    phone.lookAt(this.headWorld);
+    // The speech bubble floats over the director and turns to face you.
+    if (this.director) {
+      this.director.anchor.getWorldPosition(this.bubble.mesh.position);
+      this.bubble.mesh.position.y += 0.14 + BUBBLE_HEIGHT / 2;
+      camera.getWorldQuaternion(this.bubble.mesh.quaternion);
+    }
+    this.bubble.update(delta);
   }
 
   /** One shared label that floats over whichever light the pointer is on, saying what it is. */
@@ -1586,6 +1640,7 @@ export class LightingLevelSystem extends createSystem({
     top.target.position.copy(this.v1);
     this.world.scene.add(fill, top, top.target);
     this.houseLights = [fill, top];
+    this.houseIntensity = [fill.intensity, top.intensity];
 
     // The switch: a wall plate with a status LED and a label, at the front-left corner of the stage.
     const plate = new Group();
@@ -1649,7 +1704,7 @@ export class LightingLevelSystem extends createSystem({
   private initOrbit(): void {
     this.stage.getWorldPosition(this.pivot);
     // Aim a little low so the set sits in the upper part of the window, above the lower third.
-    this.pivot.y += 0.02;
+    this.pivot.y -= 0.05;
     this.world.camera.getWorldPosition(this.v1);
     this.v1.sub(this.pivot);
     this.orbit.radius = this.v1.length();
@@ -1707,7 +1762,7 @@ export class LightingLevelSystem extends createSystem({
       }
     }
     // The lower third sits on top of everything, so it wins when it has a button.
-    const cardHit = this.card.hasButton && this.raycaster.intersectObject(this.card.mesh, false)[0];
+    const cardHit = this.ipad.hasButton && this.raycaster.intersectObject(this.ipad.object, true)[0];
     if (cardHit) {
       fixtureHit = null;
       press = () => this.pressCard();
@@ -1749,8 +1804,9 @@ export class LightingLevelSystem extends createSystem({
         this.dragged.local.z = this.v1.z;
       }
     } else if (!this.orbiting && this.ready && !this.immersive) {
-      // Hovering: which light is under the pointer, for its name label.
+      // Hovering: which light is under the pointer, for its name label, and the phone.
       this.setPointerRay(event.clientX, event.clientY);
+      this.mouseOnPhone = this.raycaster.intersectObject(this.phone.mesh, false).length > 0;
       let nearest = Infinity;
       this.mouseHover = null;
       for (const fixture of this.fixtures) {
@@ -1810,6 +1866,4 @@ export class LightingLevelSystem extends createSystem({
   }
 }
 
-// Card size is exported for layout tests and docs.
-export const CARD_SIZE = { width: CARD_WIDTH, height: CARD_HEIGHT };
-export type { CardContent };
+
