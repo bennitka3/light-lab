@@ -1,5 +1,6 @@
 # Pose and bake any Rocketbox avatar into a static glb (crew and cast).
 # Usage: bpyenv/bin/python -I scripts/art/pose_character.py -- <avatar>.fbx <texdir> <out.glb> <pose> <name>
+#   --glasses adds procedural tortoiseshell glasses fitted to the eyes (node "<name>-glasses").
 #   pose: seated (same pose and seat height as actor-seated.glb), dinner (seated,
 #         forearms on a dining table), standing, standing-hip (weight on one leg, hand on hip),
 #         standing-cup (holding a cup at chest height).
@@ -47,6 +48,90 @@ def curl_fingers(side, deg):
                 rot(f'{side} Finger{f}{seg}', X, -deg)
             except KeyError:
                 pass
+
+
+def build_glasses(le, re):
+    """Tortoiseshell reading glasses fitted to the posed eye bones (--glasses).
+
+    Built in a head-local frame: x toward the left eye, y up, z forward (out of the face),
+    then rotated with the head bone so they follow the head tilt.
+    """
+    import bmesh
+    from math import cos, sin, pi
+    hb = arm.pose.bones['Bip01 Head']
+    delta = (M @ hb.matrix) @ (M @ hb.bone.matrix_local).inverted()
+    rq = delta.to_quaternion()
+    fwd = rq @ Vector((0, -1, 0))  # Rocketbox avatars face -Y in Blender
+    up = rq @ Vector((0, 0, 1))
+    lat = (le - re).normalized()
+    up = (up - lat * up.dot(lat)).normalized()
+    fwd = up.cross(lat) if up.cross(lat).dot(fwd) > 0 else lat.cross(up)
+    ipd = (le - re).length
+    origin = (le + re) / 2 + fwd * float(os.environ.get('GL_FWD', 0.03)) + up * 0.001
+
+    def to_world(p):
+        return origin + lat * p.x + up * p.y + fwd * p.z
+
+    bm = bmesh.new()
+
+    def tube(pts, r, closed, sides=6):
+        rings = []
+        n = len(pts)
+        for i, p in enumerate(pts):
+            a = pts[(i - 1) % n] if (closed or i > 0) else p
+            b = pts[(i + 1) % n] if (closed or i < n - 1) else p
+            t = (b - a).normalized()
+            ref = Vector((0, 0, 1)) if abs(t.z) < 0.9 else Vector((0, 1, 0))
+            nrm = t.cross(ref).normalized()
+            bin_ = t.cross(nrm).normalized()
+            rings.append([bm.verts.new(to_world(p + (nrm * cos(2 * pi * k / sides) + bin_ * sin(2 * pi * k / sides)) * r))
+                          for k in range(sides)])
+        for i in range(n if closed else n - 1):
+            r0, r1 = rings[i], rings[(i + 1) % n]
+            for k in range(sides):
+                bm.faces.new((r0[k], r0[(k + 1) % sides], r1[(k + 1) % sides], r1[k]))
+        if not closed:
+            bm.faces.new(rings[0][::-1])
+            bm.faces.new(rings[-1])
+
+    w, h, cr = 0.047, 0.033, 0.013  # lens width, height, corner radius (soft rectangles)
+    rim = 0.0022
+
+    def lens(cx):
+        pts = []
+        for (sx, sy, a0) in ((1, 1, 0), (-1, 1, 90), (-1, -1, 180), (1, -1, 270)):
+            ccx, ccy = cx + sx * (w / 2 - cr), sy * (h / 2 - cr)
+            for k in range(5):
+                a = radians(a0 + 90 * k / 4)
+                # A slight wrap: outer edges sit a few mm further back than the nose side.
+                x = ccx + cos(a) * cr
+                pts.append(Vector((x, ccy + sin(a) * cr, -0.006 * (abs(x) - ipd / 2 + w / 2) / w)))
+        return pts
+
+    half = max(ipd / 2, 0.031)
+    for s in (1, -1):
+        tube(lens(s * half), rim, True)
+        # Temple arm: from the outer top corner of the rim back over the ear.
+        x0 = s * (half + w / 2)
+        tw = float(os.environ.get('GL_TEMPLE', 0.079))
+        tube([Vector((x0, h / 2 - 0.008, -0.005)), Vector((s * (tw - 0.002), h / 2 - 0.009, -0.03)),
+              Vector((s * tw, h / 2 - 0.012, -0.075)), Vector((s * (tw - 0.004), h / 2 - 0.03, -0.098))], 0.0018, False, 5)
+    # Bridge over the nose.
+    tube([Vector((-half + w / 2, 0.006, 0.0005)), Vector((0, 0.011, 0.003)), Vector((half - w / 2, 0.006, 0.0005))],
+         0.0022, False, 5)
+    me = bpy.data.meshes.new(f'{name}-glasses')
+    bm.to_mesh(me)
+    bm.free()
+    me.shade_smooth() if hasattr(me, 'shade_smooth') else None
+    obj = bpy.data.objects.new(f'{name}-glasses', me)
+    bpy.context.scene.collection.objects.link(obj)
+    mat = bpy.data.materials.new(f'{name}-glasses')
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes['Principled BSDF']
+    bsdf.inputs['Base Color'].default_value = (0.03, 0.014, 0.006, 1)  # dark tortoiseshell brown
+    bsdf.inputs['Roughness'].default_value = 0.3
+    me.materials.append(mat)
+    return obj
 
 
 seated = pose in ('seated', 'dinner')
@@ -111,6 +196,9 @@ bpy.context.scene.collection.objects.link(body)
 le, re = bone_pos('LEye'), bone_pos('REye')
 eye_c = (le + re) / 2
 head_anchor = Vector((eye_c.x, eye_c.y + 0.07, eye_c.z))
+glasses = None
+if '--glasses' in args:
+    glasses = build_glasses(le, re)
 pelvis = bone_pos('Pelvis')
 zs = [(body.matrix_world @ v.co).z for v in baked.vertices]
 if seated:
@@ -125,12 +213,15 @@ if pose == 'dinner':
     print('ANCHOR elbows', tuple(round(v, 3) for v in bone_pos('L Forearm') + shift), 'hands', tuple(round(v, 3) for v in bone_pos('L Hand') + shift), tuple(round(v, 3) for v in bone_pos('R Hand') + shift))
 
 for o in list(bpy.data.objects):
-    if o is not body:
+    if o is not body and o is not glasses:
         bpy.data.objects.remove(o, do_unlink=True)
 root = bpy.data.objects.new(name, None)
 bpy.context.scene.collection.objects.link(root)
 body.matrix_world = Matrix.Translation(shift) @ body.matrix_world
 body.parent = root
+if glasses:
+    glasses.matrix_world = Matrix.Translation(shift) @ glasses.matrix_world
+    glasses.parent = root
 anchor = bpy.data.objects.new('subject-head' if subject_head else f'{name}-head', None)
 anchor.location = head_anchor + shift
 anchor.parent = root
@@ -181,7 +272,7 @@ for slot in body.material_slots:
 baked.calc_loop_triangles()
 print('ANCHOR tris', len(baked.loop_triangles), 'slots', [s.material.name for s in body.material_slots])
 bpy.ops.object.select_all(action='DESELECT')
-for o in (root, body, anchor):
+for o in (root, body, anchor) + ((glasses,) if glasses else ()):
     o.select_set(True)
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=True, export_yup=True, export_apply=True,
                           export_image_format='AUTO', export_animations=False, export_skins=False, export_morph=False)

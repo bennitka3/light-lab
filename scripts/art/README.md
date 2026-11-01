@@ -37,10 +37,16 @@ any avatar works; textures are converted the same way as for the actor.
 | File | Avatar (Rocketbox, MIT) | Pose | Textures |
 | --- | --- | --- | --- |
 | `actress-seated.glb` | Female_Adult_11, dress recolored deep red | dinner, `--subject-head` | 1024 |
+| `professor-seated.glb` | Male_Adult_03 (gray hair, tweed check blazer) + `--glasses` | seated, `--subject-head` | 1024 |
 | `crew-director.glb` | Male_Adult_05 | seated | 512 |
 | `crew-gaffer.glb` | Male_Adult_09 | standing | 512 |
 | `crew-sponsor.glb` | Business_Female_01 | standing-hip | 512 |
 | `crew-crafty.glb` | Chef_Female_01 | standing | 512 |
+
+`--glasses` builds tortoiseshell reading glasses from tubes fitted to the posed eye bones and
+head tilt (node `<name>-glasses`, about 580 triangles, no texture). For the professor, the fully
+transparent pixels of `hair_color.png` were filled with the average hair color before baking, so
+filtering doesn't pull black fringes into gray hair.
 
 Texture conversion: `scripts/art/convert_tex.py <Textures dir> <tex dir> <size>`. The red
 dress (`scripts/art/recolor_dress.py`): in `body_color.png`, every pixel darker than about 50% value was

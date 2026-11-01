@@ -26,6 +26,14 @@ export default defineAssets({
     type: AssetType.GLTF,
     priority: 'background',
   },
+  // The scene 2 professor (on location in his study): Rocketbox Male_Adult_03 (MIT), gray hair,
+  // brown tweed check blazer, plus procedural tortoiseshell glasses. Same seated pose, seat height
+  // and scale as actor-seated, with his own "subject-head" node.
+  professor: {
+    url: publicAssetUrl('models/professor-seated.glb'),
+    type: AssetType.GLTF,
+    priority: 'background',
+  },
   // Crew around the set (Rocketbox, MIT), placed at the "crew-*" anchors.
   'crew-director': { url: publicAssetUrl('models/crew-director.glb'), type: AssetType.GLTF, priority: 'background' },
   'crew-gaffer': { url: publicAssetUrl('models/crew-gaffer.glb'), type: AssetType.GLTF, priority: 'background' },
