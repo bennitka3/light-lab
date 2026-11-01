@@ -55,6 +55,9 @@ const gearMaterial = new MeshStandardMaterial({
   roughness: 0.5,
   metalness: 0.5,
 });
+const cameraBodyMaterial = new MeshStandardMaterial({ color: '#6b6f78', roughness: 0.45, metalness: 0.5 });
+const tallyMaterial = new MeshStandardMaterial({ color: '#ff2a2a', emissive: '#ff2a2a', emissiveIntensity: 2 });
+const monitorMaterial = new MeshStandardMaterial({ color: '#1b2a3a', emissive: '#7fb2ff', emissiveIntensity: 0.6 });
 const glassMaterial = new MeshStandardMaterial({
   color: '#0d1a26',
   roughness: 0.1,
@@ -113,7 +116,15 @@ function createCineCamera(): Group {
     tripodLeg.rotation.set(Math.cos(angle) * 0.22, 0, -Math.sin(angle) * 0.22);
     rig.add(tripodLeg);
   }
-  const bodyMesh = box(0.016, 0.014, 0.026, gearMaterial, 0, CAMERA_POSITION[1], 0.004);
+  // The body is a lighter gunmetal than the light stands, with a red tally
+  // light on top and a glowing monitor on the back, so the camera reads in a
+  // dark set (first headset playtest: "really dark and kind of hard to see").
+  const bodyMesh = box(0.016, 0.014, 0.026, cameraBodyMaterial, 0, CAMERA_POSITION[1], 0.004);
+  const tally = box(0.003, 0.0018, 0.003, tallyMaterial, 0, CAMERA_POSITION[1] + 0.0079, -0.006);
+  tally.castShadow = false;
+  const monitor = box(0.012, 0.008, 0.0008, monitorMaterial, 0.004, CAMERA_POSITION[1] + 0.011, 0.0172);
+  monitor.castShadow = false;
+  rig.add(tally, monitor);
   const lens = new Mesh(new CylinderGeometry(0.0055, 0.0055, 0.012, 20), gearMaterial);
   lens.name = 'camera-lens';
   lens.rotation.x = Math.PI / 2;
@@ -354,8 +365,8 @@ export function createFixture(kind: FixtureKind, gel: Gel = 'none'): Group {
   });
   // A larger, faintly glowing grab target so a small light is easy to find and pinch.
   const handle = new Mesh(
-    new SphereGeometry(0.026, 16, 12),
-    new MeshBasicMaterial({ color: '#f5d90a', transparent: true, opacity: 0.05, depthWrite: false }),
+    new SphereGeometry(0.038, 16, 12),
+    new MeshBasicMaterial({ color: '#f5d90a', transparent: true, opacity: 0.035, depthWrite: false }),
   );
   handle.name = 'fixture-handle';
   fixture.add(head, createYoke(kind === 'softbox' ? 0.01 : 0.0095), createStand(), handle);

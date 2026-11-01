@@ -59,6 +59,7 @@ import {
   type LightButton,
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
+import * as sfx from './sfx.js';
 
 /**
  * Runs Lucky Break: seven lighting scenes on one tabletop soundstage, and the
@@ -106,14 +107,26 @@ const POSITION_TOLERANCE = 0.045;
 const HANG_HEIGHT = 0.17;
 // How long a light must sit in the shot before Dee texts about it, and how long
 // a hint must stay the same before Dee texts it as a nudge.
-const IN_FRAME_TEXT_SECONDS = 1.2;
+// (Headset playtest: a text every time a light crossed the frame crowded the view,
+// so Dee waits until it has really been parked there, and texts once per light per scene.)
+const IN_FRAME_TEXT_SECONDS = 10;
 const NUDGE_SECONDS = 14;
 /** Dee only mentions the house lights once the player is this far into a scene. */
 const HOUSE_NUDGE_SECONDS = 20;
 // Where the lower third and the phone ride in front of the headset view (meters, head space).
-const HUD_IPAD_OFFSET = new Vector3(0, -0.21, -0.6);
-const HUD_IPAD_FULL_OFFSET = new Vector3(0, -0.04, -0.55);
-const HUD_PHONE_OFFSET = new Vector3(0.24, -0.2, -0.56);
+// In the headset they sit about 85 cm out, near the lenses' focus distance and
+// the sharp middle of the view (first headset playtest: at 60 cm, low and off
+// to the side, the text was soft and unreadable on a Quest 1).
+const HUD_IPAD_OFFSET = new Vector3(0, -0.22, -0.85);
+const HUD_IPAD_FULL_OFFSET = new Vector3(0, -0.05, -0.85);
+const HUD_IPAD_XR_SCALE = 1.35;
+const HUD_IPAD_FULL_XR_SCALE = 1.6;
+// The phone: small and low beside the iPad when tucked; raised near the middle
+// of the view, and bigger, when a text lands (like lifting it to read).
+const HUD_PHONE_OFFSET = new Vector3(0.36, -0.33, -0.84);
+const HUD_PHONE_AWAKE_OFFSET = new Vector3(0.26, 0, -0.84);
+const HUD_PHONE_XR_SCALE = 1.6;
+const HUD_PHONE_AWAKE_XR_SCALE = 2.3;
 const HUD_DESKTOP_DISTANCE = 0.6;
 
 type Pose = { azimuth: number; elevation: number; distance: number };
@@ -343,7 +356,9 @@ export class LightingLevelSystem extends createSystem({
 
   // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
   private inFrameTime = 0;
-  private inFrameTexted = false;
+  /** Lights Dee has already texted about being in the shot, this scene. */
+  private inFrameTexted = new Set<Fixture>();
+  private inFrameFixture: Fixture | undefined;
   private hintSince = 0;
   private lastHint = '';
   private lastNudge = '';
@@ -393,6 +408,7 @@ export class LightingLevelSystem extends createSystem({
       this.world.visibilityState.subscribe((state) => {
         const wasImmersive = this.immersive;
         this.immersive = state !== VisibilityState.NonImmersive;
+        if (this.immersive) sfx.unlock();
         if (this.ready && this.phase === 'title' && wasImmersive !== this.immersive) this.showTitleCard();
         this.dragged = null;
         this.orbiting = false;
@@ -401,7 +417,10 @@ export class LightingLevelSystem extends createSystem({
       }),
     );
     const canvas = this.world.renderer.domElement;
-    const onDown = (event: PointerEvent) => this.onPointerDown(event);
+    const onDown = (event: PointerEvent) => {
+      sfx.unlock();
+      this.onPointerDown(event);
+    };
     const onMove = (event: PointerEvent) => this.onPointerMove(event);
     const onUp = () => this.onPointerUp();
     const onWheel = (event: WheelEvent) => this.onWheel(event);
@@ -523,14 +542,13 @@ export class LightingLevelSystem extends createSystem({
     this.initOrbit();
     this.ready = true;
 
+    // A ?scene=N link still opens on the title page, so the iPad's "Play in VR"
+    // button is there (ben, round 6: jumping to a scene left no way into VR).
+    // Go then starts that scene.
     const start = startLevelFromUrl();
     this.loadLevel(start);
-    if (start === 0) {
-      this.phase = 'title';
-      this.showTitleCard();
-    } else {
-      this.phone.text('dee', this.level.tip);
-    }
+    this.phase = 'title';
+    this.showTitleCard();
 
     if (import.meta.env.DEV) {
       // Lets automated browser tests drive and read the game.
@@ -559,6 +577,8 @@ export class LightingLevelSystem extends createSystem({
           card: () => this.ipad.page,
           bubble: () => (this.bubble.mesh.visible ? this.bubble.line : null),
           phoneAwake: () => this.phone.awake,
+          sounds: () => ({ ...sfx.played }),
+          inXR: () => Boolean(this.world.renderer.xr.getSession()),
           inFrame: () => this.framedFixture()?.item.kind ?? null,
           // Moves fixture i to an orbit pose around the aim point (for tests).
           place: (i: number, az: number, el: number, d: number) => {
@@ -597,6 +617,9 @@ export class LightingLevelSystem extends createSystem({
             const control = typeof what === 'string' ? /^(light|warmer|cooler|size):(-?\d+)$/.exec(what) : null;
             if (what === 'card' || what === 'card-button') {
               v.set(what === 'card' ? 0 : this.ipad.buttonCenter.x, what === 'card' ? 0 : this.ipad.buttonCenter.y, 0);
+              this.ipad.object.localToWorld(v);
+            } else if (what === 'card-button2') {
+              v.set(this.ipad.secondButtonCenter.x, this.ipad.secondButtonCenter.y, 0);
               this.ipad.object.localToWorld(v);
             } else if (control) {
               const n = Number(control[2]);
@@ -641,7 +664,7 @@ export class LightingLevelSystem extends createSystem({
     this.sceneTime = 0;
     this.holdTime = 0;
     this.inFrameTime = 0;
-    this.inFrameTexted = false;
+    this.inFrameTexted.clear();
     this.hintSince = 0;
     this.lastHint = '';
     this.framesSinceLoad = 0;
@@ -854,8 +877,10 @@ export class LightingLevelSystem extends createSystem({
       case 'title':
         this.phase = 'playing';
         this.showBriefCard();
-        this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
-        this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+        if (this.levelIndex === 0) {
+          this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
+          this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
+        }
         this.phone.text('dee', this.level.tip);
         break;
       case 'won':
@@ -962,7 +987,7 @@ export class LightingLevelSystem extends createSystem({
     const headset = this.immersive;
     this.showPage({
       full: true,
-      eyebrow: 'Lucky Break · How to play',
+      eyebrow: this.levelIndex > 0 ? `Lucky Break · Starting at scene ${this.levelIndex + 1}` : 'Lucky Break · How to play',
       title: 'Twelve years as Background Extra #47.',
       body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       steps: headset
@@ -978,8 +1003,10 @@ export class LightingLevelSystem extends createSystem({
             'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
             'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
           ],
-      footer: this.canEnterXR || headset
+      footer: headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
+        : this.canEnterXR
+        ? 'In the headset browser? If it asks to allow immersive mode, press Allow first.'
         : 'Seven scenes. Zero qualifications. On a Quest? Open this page there to play in VR.',
       button2: this.canEnterXR && !headset ? 'Play in VR' : undefined,
       button: 'Go',
@@ -1649,13 +1676,11 @@ export class LightingLevelSystem extends createSystem({
   /** Dee texts when a light sits in the shot, or when the player has been stuck on one hint for a while. */
   private updateNudges(delta: number, score: number, hint: string): void {
     const framed = this.framedFixture();
-    this.inFrameTime = framed ? this.inFrameTime + delta : 0;
-    if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted) {
-      this.inFrameTexted = true;
+    this.inFrameTime = framed && framed === this.inFrameFixture ? this.inFrameTime + delta : 0;
+    this.inFrameFixture = framed;
+    if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted.has(framed)) {
+      this.inFrameTexted.add(framed);
       this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`);
-    }
-    if (!framed && this.inFrameTime === 0 && this.inFrameTexted && score > 40) {
-      this.inFrameTexted = false;
     }
     this.sinceNudge += delta;
     this.sceneTime += delta;
@@ -1751,6 +1776,12 @@ export class LightingLevelSystem extends createSystem({
       'pointerdown',
       onPhoneDown,
     );
+    // A chime and a buzz when a text lands; the director's "wah-wah" voice with each line.
+    this.phone.onArrive = () => {
+      sfx.textChime();
+      sfx.buzz(this.world.renderer.xr.getSession());
+    };
+    this.bubble.onShow = (_speaker, line) => sfx.mumble(line);
     this.world.scene.add(this.bubble.mesh);
     this.buildDirector();
   }
@@ -1824,10 +1855,10 @@ export class LightingLevelSystem extends createSystem({
       ipad.position.copy(camera.localToWorld(this.hudTarget));
       ipad.quaternion.copy(camera.getWorldQuaternion(ipad.quaternion));
       // The phone stands just right of the iPad, about as tall, and slides down when idle.
-      const phoneScale = Math.max(
-        (halfH * 0.55) / PHONE_HEIGHT,
-        Math.min((halfH * 0.9) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH),
-      );
+      // The iPad's -/+ buttons size the phone too.
+      const phoneScale =
+        Math.max((halfH * 0.6) / PHONE_HEIGHT, Math.min((halfH * 0.9) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH)) *
+        MathUtils.clamp(this.ipadZoom, 0.85, 1.3);
       const phoneH = PHONE_HEIGHT * phoneScale;
       phone.scale.setScalar(phoneScale);
       const phoneX = Math.min(ipadW / 2 + margin + (PHONE_WIDTH * phoneScale) / 2, halfW - margin - (PHONE_WIDTH * phoneScale) / 2);
@@ -1836,16 +1867,20 @@ export class LightingLevelSystem extends createSystem({
       phone.position.copy(camera.localToWorld(this.hudTarget));
       phone.quaternion.copy(ipad.quaternion);
     } else {
-      ipad.scale.setScalar(full ? 1 : 0.75 * this.ipadZoom);
-      phone.scale.setScalar(1);
+      const zoom = this.ipadZoom;
+      ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
+      phone.scale.setScalar(MathUtils.lerp(HUD_PHONE_AWAKE_XR_SCALE, HUD_PHONE_XR_SCALE, this.phoneTuck) * zoom);
       const follow = this.xrPlaced ? 1 - Math.exp(-delta * 3) : 1;
       this.xrPlaced = true;
       this.hudTarget.copy(full ? HUD_IPAD_FULL_OFFSET : HUD_IPAD_OFFSET);
       camera.localToWorld(this.hudTarget);
       ipad.position.lerp(this.hudTarget, follow);
       ipad.lookAt(this.headWorld);
-      this.hudTarget.copy(HUD_PHONE_OFFSET);
-      this.hudTarget.y += bounce - this.phoneTuck * 0.11;
+      // Up near the middle of the view while awake, down beside the iPad when tucked.
+      // A bigger iPad pushes the phone out to keep them side by side.
+      this.hudTarget.lerpVectors(HUD_PHONE_AWAKE_OFFSET, HUD_PHONE_OFFSET, this.phoneTuck);
+      this.hudTarget.x *= 0.5 + 0.5 * zoom;
+      this.hudTarget.y += bounce;
       camera.localToWorld(this.hudTarget);
       phone.position.lerp(this.hudTarget, follow);
       phone.lookAt(this.headWorld);

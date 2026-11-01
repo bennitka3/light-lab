@@ -137,19 +137,41 @@ export class IPad {
     this.shots = [targetPlane, livePlane];
     // Labels and effects over the shots: a second, transparent layer of the same canvas would
     // cost a texture; instead the labels sit in a thin strip drawn above each shot on the body.
-    this.object.add(body, targetPlane, livePlane);
+    // Pointer hits land on an invisible plane the size of what is drawn (the
+    // compact strip leaves the top of the body empty), and the iPad outranks
+    // the set behind it, so a headset ray that crosses it always presses it.
+    for (const layer of [body, targetPlane, livePlane]) {
+      (layer as unknown as { pointerEvents: string }).pointerEvents = 'none';
+    }
+    this.hit.name = 'ipad-hit';
+    (this.object as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
+    this.object.add(body, targetPlane, livePlane, this.hit);
     for (const child of this.object.children) {
       child.frustumCulled = false;
     }
+    this.fitHit();
     this.overlay = new Mesh(new PlaneGeometry(SHOT_W, SHOT_H), hud(this.overlayTexture(), true));
     this.overlay.position.copy(livePlane.position);
     this.overlay.renderOrder = 1002;
     this.overlay.frustumCulled = false;
     this.overlay.visible = false;
+    (this.overlay as unknown as { pointerEvents: string }).pointerEvents = 'none';
     this.object.add(this.overlay);
   }
 
   private overlay: Mesh;
+  /** What a pointer hits: the drawn part of the iPad only. */
+  private hit = new Mesh(
+    new PlaneGeometry(IPAD_WIDTH, 1),
+    new MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, colorWrite: false }),
+  );
+
+  /** Sizes the hit plane to the full page or the compact strip at the bottom. */
+  private fitHit(): void {
+    const h = this.page.full ? IPAD_HEIGHT : IPAD_COMPACT_HEIGHT;
+    this.hit.scale.y = h;
+    this.hit.position.y = -IPAD_HEIGHT / 2 + h / 2;
+  }
   private overlayCanvas = document.createElement('canvas');
   private overlayTex?: CanvasTexture;
 
@@ -219,12 +241,18 @@ export class IPad {
     return this.page.full ? FULL_BUTTON_CENTER : SMALL_BUTTON_CENTER;
   }
 
+  /** The second button ("Play in VR") center, for tests that click it. */
+  get secondButtonCenter(): { x: number; y: number } {
+    return SECOND_BUTTON_CENTER;
+  }
+
   get isFull(): boolean {
     return Boolean(this.page.full);
   }
 
   show(page: IPadPage): void {
     this.page = page;
+    this.fitHit();
     this.draw();
   }
 
