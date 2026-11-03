@@ -46,6 +46,25 @@ const { chromium } = require('playwright');
   await click(await at('light:0'));
   results.houseSwitchWorks = !(await api(() => window.lightLab.houseOn()));
 
+  // Scene 1 is the dimmer tutorial: the arrows on the iPad change a light's brightness.
+  const d0 = await api(() => window.lightLab.dimmer(0));
+  await click(await at('brighter:1'));
+  results.dimmerArrowWorks = (await api(() => window.lightLab.dimmer(0))) > d0;
+  await api(() => window.lightLab.solve());
+  await page.waitForTimeout(3500);
+  results.wins = (await api(() => window.lightLab.level())).phase === 'won';
+  await page.screenshot({ path: `${out}/smoke-won.png` });
+  // Roll: the take plays, then Cut and Next scene.
+  await click(await at('card-button'));
+  await page.waitForTimeout(800);
+  results.rollStartsTake = (await api(() => window.lightLab.take())) > 0;
+  await api(() => window.lightLab.finishTake());
+  await page.waitForTimeout(800);
+  await click(await at('card-button'));
+  await page.waitForTimeout(1500);
+  results.cardGoesToScene2 = (await api(() => window.lightLab.level())).index === 1;
+
+  // Scene 2: you place the light yourself.
   const idx = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.kind === 'softbox'));
   const before = await api((i) => ({ ...window.lightLab.fixtures()[i].local }), idx);
   const p = await at(idx);
@@ -74,15 +93,6 @@ const { chromium } = require('playwright');
   await page.waitForTimeout(200);
   results.wheelZooms = (await api(() => window.lightLab.orbit.radius)) > r0;
   await page.screenshot({ path: `${out}/smoke-playing.png` });
-
-  // Put the light exactly on its mark and wait for the director to call it.
-  await api(() => window.lightLab.solve());
-  await page.waitForTimeout(3500);
-  results.wins = (await api(() => window.lightLab.level())).phase === 'won';
-  await page.screenshot({ path: `${out}/smoke-won.png` });
-  await click(await at('card-button'));
-  await page.waitForTimeout(800);
-  results.cardGoesToScene2 = (await api(() => window.lightLab.level())).index === 1;
 
   console.log(results);
   console.log('errors', errors.length ? errors : 'none');

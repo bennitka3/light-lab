@@ -49,6 +49,8 @@ export class PhoneHud {
   private sinceLast = Infinity;
   /** Seconds left before the next queued text may start arriving. */
   private readFor = 0;
+  /** Seconds the phone keeps quiet before a new text starts (the director is talking). */
+  quietFor = 0;
   /** How far (canvas pixels) the chat is still sliding up after a text landed; eases to 0. */
   private slide = 0;
   /** The player tapped the phone to keep it up. */
@@ -150,6 +152,7 @@ export class PhoneHud {
     this.pop = Math.max(0, this.pop - delta * 2.5);
     this.sinceLast += delta;
     this.readFor = Math.max(0, this.readFor - delta);
+    this.quietFor = Math.max(0, this.quietFor - delta);
     if (this.slide > 0) {
       // The chat glides up instead of jumping when a text lands.
       this.slide = this.slide < 0.5 ? 0 : this.slide * Math.exp(-delta * 9);
@@ -162,7 +165,7 @@ export class PhoneHud {
         this.draw(false);
       }
     }
-    if (this.queue.length === 0 || (this.readFor > 0 && this.typing === 0)) {
+    if (this.queue.length === 0 || ((this.readFor > 0 || this.quietFor > 0) && this.typing === 0)) {
       return;
     }
     if (this.queue[0].from !== 'dee') {

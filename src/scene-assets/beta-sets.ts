@@ -8,12 +8,17 @@ import {
   DoubleSide,
   Group,
   HemisphereLight,
+  IcosahedronGeometry,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
   NoColorSpace,
   Object3D,
+  Path,
+  Shape,
+  ShapeGeometry,
   PlaneGeometry,
+  RepeatWrapping,
   SphereGeometry,
   SRGBColorSpace,
 } from '@iwsdk/core';
@@ -186,6 +191,19 @@ function createDesertSet(): Group {
   const skylight = new HemisphereLight('#a9cdf0', '#c79a62', 0.6);
   skylight.name = 'skylight';
   set.add(sun, sun.target, skylight);
+  // A tumbleweed that blows across behind them when the camera rolls (hidden till then).
+  const weedMaterial = new MeshStandardMaterial({ color: '#7a5a32', roughness: 1, wireframe: true });
+  const tumbleweed = new Group();
+  tumbleweed.name = 'tumbleweed';
+  for (let i = 0; i < 5; i++) {
+    const ball = new Mesh(new IcosahedronGeometry(0.02 - i * 0.002, 1), weedMaterial);
+    ball.rotation.set(i * 0.7, i * 1.3, i * 0.4);
+    ball.castShadow = true;
+    tumbleweed.add(ball);
+  }
+  tumbleweed.position.set(-0.3, 0.02, -0.13);
+  tumbleweed.visible = false;
+  set.add(tumbleweed);
   return set;
 }
 
@@ -208,7 +226,8 @@ function paintHighway(ctx: CanvasRenderingContext2D, w: number, h: number): void
   ctx.beginPath();
   ctx.moveTo(0, h * 0.62);
   for (let x = 0; x <= w; x += 16) {
-    ctx.lineTo(x, h * 0.52 - 40 * Math.abs(Math.sin(x * 0.004)) - 14 * Math.sin(x * 0.019));
+    // Whole numbers of hills across the width, so the picture tiles when the wall scrolls.
+    ctx.lineTo(x, h * 0.52 - 40 * Math.abs(Math.sin((x / w) * Math.PI * 3)) - 14 * Math.sin((x / w) * Math.PI * 2 * 12));
   }
   ctx.lineTo(w, h * 0.62);
   ctx.fill();
@@ -220,7 +239,7 @@ function paintHighway(ctx: CanvasRenderingContext2D, w: number, h: number): void
   ctx.fillStyle = '#3b3b40';
   ctx.fillRect(0, h * 0.74, w, h * 0.26);
   ctx.fillStyle = '#f2d06b';
-  for (let x = 0; x < w; x += 70) {
+  for (let x = 0; x < w; x += 64) {
     ctx.fillRect(x, h * 0.86, 40, 5);
   }
   ctx.fillStyle = '#c9c9cc';
@@ -399,7 +418,10 @@ export function fitCarModel(model: Object3D): Group {
   clone.scale.set(0.087, 0.1, 0.112);
   const paint = new MeshStandardMaterial({ color: '#8f1d1d', roughness: 0.22, metalness: 0.55 });
   const glass = new MeshStandardMaterial({ color: '#9fb4c4', roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.18, depthWrite: false });
+  const wheels: Object3D[] = [];
+  car.userData.wheels = wheels;
   clone.traverse((child) => {
+    if (/^wheel_(front|back)(Left|Right)$/.test(child.name) && !(child instanceof Mesh)) wheels.push(child);
     // Smaller wheels (the kit's are toy-sized), still on the floor: radius 0.3 at y 0.3.
     if (/^wheel_(front|back)(Left|Right)$/.test(child.name) && !(child instanceof Mesh)) {
       child.scale.multiplyScalar(0.85);
@@ -422,19 +444,105 @@ export function fitCarModel(model: Object3D): Group {
       }
       return copy;
     };
+    const original = child.material as MeshStandardMaterial;
     child.material = Array.isArray(child.material)
       ? child.material.map((m) => swap(m as MeshStandardMaterial))
       : swap(child.material as MeshStandardMaterial);
     if ((Array.isArray(child.material) ? child.material : [child.material]).includes(glass)) child.castShadow = false;
+    if (!Array.isArray(original) && original.name === 'plastic') openRearWindows(child, glass);
   });
   car.add(clone);
   return car;
+}
+
+/**
+ * Kenney's SUV has one window a side; behind it the cabin is a solid gray panel, so the
+ * dog's head poked through it (ben, round 10). This drops that panel (two triangles a
+ * side, in the plastic part's own copy of the geometry) and puts back a panel with a
+ * rolled-down rear door window (the dog leans out of it) and a glass rear quarter window.
+ * Coordinates are the kit's own: x across the car, y up, z from the hood (-z) to the tailgate.
+ */
+function openRearWindows(plastic: Mesh, glass: MeshStandardMaterial): void {
+  const geometry = plastic.geometry.clone();
+  const index = geometry.getIndex();
+  const position = geometry.getAttribute('position');
+  if (!index) return;
+  const keep: number[] = [];
+  const isRearPanel = (a: number, b: number, c: number): boolean =>
+    [a, b, c].every((v) => Math.abs(position.getX(v)) > 0.44 && position.getY(v) > 0.55 && position.getZ(v) > 0.2) &&
+    [a, b, c].some((v) => Math.abs(position.getZ(v) - 1.25) < 0.01 || Math.abs(position.getZ(v) - 0.25) < 0.01) &&
+    [a, b, c].some((v) => Math.abs(position.getY(v) - 0.6) < 0.01);
+  for (let i = 0; i < index.count; i += 3) {
+    const [a, b, c] = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+    if (!isRearPanel(a, b, c)) keep.push(a, b, c);
+  }
+  geometry.setIndex(keep);
+  plastic.geometry = geometry;
+  plastic.userData.sharedGeometry = false;
+
+  // The new side panel: the old outline (bottom at y 0.6, roof edge sloping up to the
+  // tailgate corner), with the two window holes cut out.
+  const outline = new Shape();
+  outline.moveTo(0.25, 0.6);
+  outline.lineTo(1.25, 0.6);
+  outline.lineTo(1.05, 1.1);
+  outline.lineTo(0.25, 1.002);
+  outline.closePath();
+  const rearDoor = new Path();
+  rearDoor.moveTo(0.32, 0.64);
+  rearDoor.lineTo(0.32, 0.95);
+  rearDoor.lineTo(0.68, 0.95);
+  rearDoor.lineTo(0.68, 0.64);
+  rearDoor.closePath();
+  const quarter = new Path();
+  quarter.moveTo(0.8, 0.64);
+  quarter.lineTo(0.8, 0.95);
+  quarter.lineTo(1.06, 0.95);
+  quarter.lineTo(1.12, 0.64);
+  quarter.closePath();
+  outline.holes.push(rearDoor, quarter);
+  // Shape x is the car's z; the panel leans in toward the roof like the kit's (x 0.55 at the
+  // sill, 0.45 at the roof).
+  const toSide = (g: ShapeGeometry, side: number): ShapeGeometry => {
+    const p = g.getAttribute('position');
+    for (let v = 0; v < p.count; v++) {
+      const z = p.getX(v);
+      const y = p.getY(v);
+      p.setXYZ(v, side * (0.55 - (y - 0.6) * 0.2), y, z);
+    }
+    g.computeVertexNormals();
+    return g;
+  };
+  const trim = (plastic.material as MeshStandardMaterial).clone();
+  trim.side = DoubleSide;
+  const quarterGlass = new Shape();
+  quarterGlass.moveTo(0.8, 0.64);
+  quarterGlass.lineTo(0.8, 0.95);
+  quarterGlass.lineTo(1.06, 0.95);
+  quarterGlass.lineTo(1.12, 0.64);
+  quarterGlass.closePath();
+  // A dark interior behind the open window, so you don't see straight through the car.
+  const cabin = new MeshStandardMaterial({ color: '#1c1c1f', roughness: 0.9, side: DoubleSide });
+  for (const side of [-1, 1]) {
+    const panel = new Mesh(toSide(new ShapeGeometry(outline), side), trim);
+    panel.position.copy(plastic.position);
+    panel.castShadow = true;
+    const pane = new Mesh(toSide(new ShapeGeometry(quarterGlass), side), glass);
+    pane.position.copy(plastic.position);
+    plastic.parent?.add(panel, pane);
+  }
+  const back = new Mesh(new PlaneGeometry(0.9, 0.36), cabin);
+  back.rotation.y = Math.PI / 2;
+  back.position.set(plastic.position.x + 0.2, plastic.position.y + 0.79, plastic.position.z + 0.7);
+  plastic.parent?.add(back);
 }
 
 function createLedVolumeSet(): Group {
   const set = new Group();
   // The wraparound LED wall: a half cylinder behind the car, showing a highway.
   const screen = paintTexture(2048, 512, (ctx) => paintHighway(ctx, 2048, 512));
+  // It tiles, so the scenery can scroll past while the camera rolls.
+  screen.wrapS = RepeatWrapping;
   const wall = new Mesh(
     new CylinderGeometry(0.195, 0.195, STAGE_HEIGHT - 0.02, 64, 1, true, Math.PI / 2, Math.PI),
     new MeshBasicMaterial({ map: screen, toneMapped: false, side: DoubleSide }),
@@ -452,7 +560,8 @@ function createLedVolumeSet(): Group {
   car.position.set(0.005, 0, -0.06);
   set.add(car);
   const dog = createDog();
-  dog.position.set(0.048, 0.098, 0.009);
+  // Head out of the rolled-down rear door window (fitCarModel), neck back inside.
+  dog.position.set(0.049, 0.099, -0.004);
   dog.rotation.y = -0.35;
   set.add(dog);
 

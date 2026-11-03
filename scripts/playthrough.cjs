@@ -23,7 +23,8 @@ const { chromium } = require('playwright');
   log('start', await lv());
   await page.evaluate(() => window.lightLab.pressCard());
   await page.waitForTimeout(800);
-  for (let i = 0; i < 7; i++) {
+  const count = await page.evaluate(() => window.lightLab.levelIds().length);
+  for (let i = 0; i < count; i++) {
     const s = await lv();
     log('scene', i + 1, s, 'score', await page.evaluate(() => window.lightLab.score()), 'hint', await page.evaluate(() => window.lightLab.hint()));
     await page.screenshot({ path: `${out}/${i + 1}-a-start.png` });
@@ -32,16 +33,24 @@ const { chromium } = require('playwright');
     const after = await lv();
     log('  solved ->', after, 'score', await page.evaluate(() => window.lightLab.score()));
     await page.screenshot({ path: `${out}/${i + 1}-b-solved.png` });
-    if (after.phase !== 'won') { log('  !! not won'); }
+    if (after.phase !== 'won') { log('  !! not won'); errors.push(`scene ${i + 1} not won`); }
+    if (i < count - 1) {
+      // Roll: the take plays (cast talk, Cut), then Next scene.
+      await page.evaluate(() => window.lightLab.pressCard());
+      await page.waitForTimeout(1500);
+      log('  rolling, take', await page.evaluate(() => window.lightLab.take()));
+      await page.evaluate(() => window.lightLab.finishTake());
+      await page.waitForTimeout(500);
+    }
     await page.evaluate(() => window.lightLab.pressCard());
     await page.waitForTimeout(1500);
   }
   log('after last press', await lv());
-  await page.screenshot({ path: `${out}/8-rolled.png` });
+  await page.screenshot({ path: `${out}/${count + 1}-rolled.png` });
   await page.evaluate(() => window.lightLab.pressCard());
   await page.waitForTimeout(1000);
   log('credits?', await lv());
-  await page.screenshot({ path: `${out}/9-credits.png` });
+  await page.screenshot({ path: `${out}/${count + 2}-credits.png` });
   await page.evaluate(() => window.lightLab.pressCard());
   await page.waitForTimeout(1500);
   log('replay?', await lv());

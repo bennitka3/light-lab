@@ -36,13 +36,17 @@ const { chromium } = require('playwright');
   await page.mouse.click(button.x, button.y);
   await wait(500);
   check('iPad Go button starts scene 1', (await state()).phase === 'playing');
-  // Round 9: texts wait for you to read the last one (about 0.25 s a word), so give it longer.
-  await wait(11000);
+  // Round 9: texts wait for you to read the last one (about 0.25 s a word); round 10: and for the
+  // director to finish his two opening lines. So give it longer.
+  await wait(22000);
   const texts = await api(() => window.lightLab.texts());
   check('Dee texts the intro and a tip', texts.length >= 3 && texts[0].startsWith('dee:'), texts);
   await page.screenshot({ path: `${out}/02-scene1-phone.png` });
 
   // Round 4. Light switches on the iPad: HOUSE and each light, labeled; hover outlines the switch.
+  // (Scene 1 is now the locked dimmer tutorial; these run on scene 2, the first you place lights in.)
+  await api(() => window.lightLab.loadLevelId('beta-2-key-dimmer'));
+  await wait(800);
   const buttons = await api(() => window.lightLab.lightButtons());
   check('iPad has a labeled switch for HOUSE and every light', buttons.map((b) => b.label).join(',') === 'HOUSE,Fresnel,Softbox,PAR can', buttons);
   await page.mouse.click((await at('light:0')).x, (await at('light:0')).y);
@@ -81,7 +85,8 @@ const { chromium } = require('playwright');
   await page.mouse.move(5, 5);
 
   // 1. Every scene's solution is out of frame and wins.
-  for (let i = 0; i < 7; i++) {
+  const ids = await api(() => window.lightLab.levelIds());
+  for (let i = 0; i < ids.length; i++) {
     await api((n) => window.lightLab.loadLevel(n), i);
     await api(() => window.lightLab.solve());
     await wait(1200);
@@ -89,10 +94,12 @@ const { chromium } = require('playwright');
     await wait(2500);
     const after = await state();
     check(`scene ${i + 1} solution has nothing in frame and wins`, s.inFrame === null && after.phase === 'won', { inFrame: s.inFrame, after });
+    const placement = await api(() => window.lightLab.placement());
+    check(`scene ${i + 1} (${ids[i]}): nothing placed unrealistically`, placement.length === 0, placement);
   }
 
   // 2a. Scene 3: a light standing in front of the bottle fails the take.
-  await api(() => window.lightLab.loadLevel(2));
+  await api(() => window.lightLab.loadLevelId('product'));
   const par3 = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.kind === 'par'));
   await api((i) => window.lightLab.placeAt(i, 0.01, 0.07, 0.0), par3);
   await api(() => window.lightLab.solve());
@@ -102,7 +109,7 @@ const { chromium } = require('playwright');
   await page.screenshot({ path: `${out}/04-scene3-light-in-frame.png` });
 
   // 2b. Scene 5: the top light dropped low, right in front of his face.
-  await api(() => window.lightLab.loadLevel(4));
+  await api(() => window.lightLab.loadLevelId('interrogation'));
   await api(() => window.lightLab.solve());
   const top5 = await api(() => window.lightLab.fixtures().findIndex((f) => f.on));
   await api((i) => window.lightLab.place(i, 0, 15, 0.06), top5);
@@ -112,7 +119,7 @@ const { chromium } = require('playwright');
   await page.screenshot({ path: `${out}/05-scene5-light-in-front.png` });
 
   // 3. Scene 7: the first SCREEN panel in the kit, placed on the RIGHT mark.
-  await api(() => window.lightLab.loadLevel(6));
+  await api(() => window.lightLab.loadLevelId('restaurant'));
   await api(() => window.lightLab.setHouse(false));
   await api(() => {
     const ll = window.lightLab;
@@ -135,7 +142,7 @@ const { chromium } = require('playwright');
   await page.screenshot({ path: `${out}/06-scene7-solved.png` });
 
   // 4. Scene 2: on location, starts with the key bumped.
-  await api(() => window.lightLab.loadLevel(1));
+  await api(() => window.lightLab.loadLevelId('interview'));
   await wait(1500);
   const s2 = await state();
   const on2 = await api(() => window.lightLab.fixtures().filter((f) => f.on).length);
@@ -150,7 +157,7 @@ const { chromium } = require('playwright');
   check('win line comes from the director, on set', typeof line === 'string' && line.startsWith('"'), line);
 
   // Round 2. 6. Hints for lights behind the cast say plain moves, not "swing".
-  await api(() => window.lightLab.loadLevel(6));
+  await api(() => window.lightLab.loadLevelId('restaurant'));
   await api(() => window.lightLab.solve());
   const back7 = await api(() => window.lightLab.fixtures().findIndex((f) => f.on && (f.item.kind === 'par' || f.item.kind === 'fresnel')));
   // Where ben had it: low, right behind the table.
@@ -163,11 +170,12 @@ const { chromium } = require('playwright');
   check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /camera-right|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
 
   // 7. The director's lines come from the set; Mom arrives as a banner, not in Dee's chat.
-  await api(() => window.lightLab.loadLevel(5));
+  await api(() => window.lightLab.loadLevelId('sunset'));
   await wait(300);
   check('director says the scene quote in a speech bubble', /Golden hour/.test((await api(() => window.lightLab.bubble())) || ''), await api(() => window.lightLab.bubble()));
   await api(() => window.lightLab.solve());
-  await wait(4500);
+  // Round 10: texts wait for the director to finish his win line, then a beat.
+  await wait(10000);
   await page.screenshot({ path: `${out}/09-mom-banner.png` });
   const t2 = await api(() => window.lightLab.texts());
   check('Mom texts as a notification', t2.some((t) => t.startsWith('mom:')), t2.slice(-3));
@@ -175,7 +183,8 @@ const { chromium } = require('playwright');
   check('Dee win lines never say "real guy"', winsNoRealGuy && !t2.some((t) => /real guy/.test(t)));
 
   // 8. The phone tucks down when nothing is happening; a tap keeps it up, another tucks it.
-  await wait(9000);
+  // Wait for the win texts to finish (they now wait for the director), then the phone to idle.
+  await page.waitForFunction(() => !window.lightLab.phoneAwake(), null, { timeout: 60000 }).catch(() => {});
   const tucked = !(await api(() => window.lightLab.phoneAwake()));
   let ph = await at('phone');
   await page.mouse.click(ph.x, 712);
@@ -192,7 +201,7 @@ const { chromium } = require('playwright');
   await page.mouse.move(5, 5);
 
   // Round 4. The bi-color light: its dial on the iPad must go warm for the warm role.
-  await api(() => window.lightLab.loadLevel(3));
+  await api(() => window.lightLab.loadLevelId('living-room'));
   await wait(400);
   const b4 = await api(() => window.lightLab.lightButtons());
   check('scene 4 iPad shows a dial on the bi-color softbox, and a Lamp switch', b4.some((b) => b.kelvin === 5600) && b4[b4.length - 1].label === 'Lamp', b4);
@@ -221,7 +230,7 @@ const { chromium } = require('playwright');
   check('dialing back to 3200K wins scene 4', (await api((i) => window.lightLab.kelvin(i), dialIdx)) === 3200 && warm.phase === 'won', warm);
 
   // Round 5. The director turns to look at you before his win line.
-  await api(() => window.lightLab.loadLevel(0));
+  await api(() => window.lightLab.loadLevelId('beta-1-tutorial'));
   await wait(1500);
   const turn0 = await api(() => window.lightLab.directorTurn());
   await api(() => window.lightLab.solve());
@@ -236,7 +245,7 @@ const { chromium } = require('playwright');
 
   // Round 5, changed in round 9: the house lights help you see while you place lights, so the
   // tip doesn't ask for them off at the start (only once everything else is right).
-  await api(() => window.lightLab.loadLevel(0));
+  await api(() => window.lightLab.loadLevelId('beta-1-tutorial'));
   await wait(500);
   const hh1 = (await state()).hint;
   const house = await at('light:0');
@@ -261,6 +270,53 @@ const { chromium } = require('playwright');
   await page.screenshot({ path: `${out}/14-phone-scrolled.png` });
   check('scrolling over the phone shows older texts', back > 0, { back });
   await page.mouse.move(5, 5);
+
+  // Round 10. Dee waits for the director to finish talking.
+  await api(() => window.lightLab.loadLevelId('product'));
+  await api(() => window.lightLab.clearPhone());
+  await wait(300);
+  await api(() => window.lightLab.dee('round ten breathing test'));
+  let overlap = false;
+  let arrived = false;
+  for (let k = 0; k < 90 && !arrived; k++) {
+    const st = await api(() => ({ speaking: window.lightLab.directorSpeaking(), t: window.lightLab.texts() }));
+    arrived = st.t.some((t) => /breathing test/.test(t));
+    if (arrived && st.speaking) overlap = true;
+    await wait(300);
+  }
+  check('Dee waits until the director has finished his line', arrived && !overlap, { arrived, overlap });
+
+  // Round 10. The director's chair turns with him, and he wobbles while he talks.
+  await api(() => window.lightLab.loadLevelId('beta-2-key-dimmer'));
+  await wait(400);
+  const wob = await api(() => window.lightLab.directorWobble());
+  await api(() => window.lightLab.solve());
+  await wait(3500);
+  const chairTurn = await api(() => window.lightLab.directorChairTurn());
+  const modelTurn = await api(() => window.lightLab.directorTurn());
+  check('the director wobbles while he talks', (wob ?? 0) > 0.002 || (await api(() => window.lightLab.directorWobble())) > 0.002, { wob });
+  check("the director's chair turns with him", chairTurn !== null && Math.abs(chairTurn - modelTurn) < 0.01 && Math.abs(chairTurn) > 0.3, { chairTurn, modelTurn });
+
+  // Round 10. Every win has a Roll: action, then Cut and Next scene.
+  const before = await state();
+  check('win button says Roll', (await api(() => window.lightLab.card())).button === 'Roll', await api(() => window.lightLab.card()));
+  await api(() => window.lightLab.pressCard());
+  await wait(2500);
+  const rolling = await api(() => ({ take: window.lightLab.take(), card: window.lightLab.card(), sway: window.lightLab.castSway() }));
+  check('Roll starts the take: the cast talk, the iPad says Rolling', rolling.take > 0 && rolling.card.eyebrow === 'Rolling' && rolling.sway.some((v) => v > 0.002) && (await state()).index === before.index, rolling);
+  await page.screenshot({ path: `${out}/15-rolling.png` });
+  await api(() => window.lightLab.finishTake());
+  await wait(600);
+  check('after Cut the button is Next scene', (await api(() => window.lightLab.card())).button === 'Next scene', await api(() => window.lightLab.card()));
+
+  // Round 10. The overhead silk can't be brought down onto people.
+  await api(() => window.lightLab.loadLevelId('beta-3-desert'));
+  await wait(400);
+  const silk = await api(() => window.lightLab.fixtures().findIndex((f) => f.item.kind === 'silk'));
+  await api((i) => window.lightLab.placeAt(i, 0, 0.05, -0.06), silk);
+  await wait(400);
+  const silkY = await api((i) => window.lightLab.fixtures()[i].local.y, silk);
+  check('the silk stays above everyone\'s heads', silkY >= 0.17, { silkY });
 
   console.log('errors', errors.length ? errors : 'none');
   const failed = Object.entries(results).filter(([, ok]) => !ok);

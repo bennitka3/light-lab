@@ -3,6 +3,19 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 10: 2026-11-03 (ben, beta track, desktop browser)
+
+| ben said | Status |
+|---|---|
+| "the notes from Dee shouldn't happen at the same time as the director notes. give them room to breathe" (both tracks) | **Done.** Dee's texts (and Mom's banners) wait until the director has finished his line, plus a 1.2 s beat. |
+| "the dog's head is sticking through an opaque surface. can we not generate one? you can use blender right?" | **Fixed without a new model.** The Kenney SUV had one window a side and a solid panel behind it. The game now cuts that panel out and puts back a panel with an open rear door window (the dog leans out of it) and a glass rear quarter window. Blender isn't installed in this cloud setup. A from-scratch SUV is still an option if this isn't enough. |
+| "when they hit Roll on each one, we should see some action, like the actor WAWAWA-ing, the LED panel wall moving, and the desert deserting" | **Done.** Every win now has a Roll button. The director calls action. For about 4 s the cast take turns talking (sway plus a higher "wa-wa" voice), the LED wall scrolls the highway past the car and the wheels spin, and a tumbleweed bounces across the desert. Then he calls Cut and the button turns to Next scene. |
+| "the silk is going through people" | **Fixed.** The silk can never come lower than 0.17 m on the 1:14 set (2.4 m real), parked or rigged, so its frame clears everyone's head. |
+| "the director has a weird position still. maybe just widen the set?" | **Done.** The studio floor in front of the set now runs wider and deeper under the whole crew. The director sits a little further out, clear of the wall's corner. The crew's little floor mats are hidden outdoors, where they looked like platforms on the sand. |
+| "add a 'Does this look like realistic placement of objects' check before any update" | **Done.** `scripts/placement-check.cjs` checks all ten scenes, parked and solved: nobody inside a light, a wall or each other, the crew standing on the floor, nothing floating or through the floor. It also saves screenshots for a look by eye. The first run caught the silk; it's now in CLAUDE.md as a rule before every update. |
+| "when the director turns toward you his whole chair should turn with him. maybe even make him wobble a little when he talks" | **Done.** The chair turns with him, and he sways a little while his bubble is up. |
+| "you can add these levels in sequence to the normal playthrough" | **Done.** The main game is now 10 scenes: tutorial, social clip with a dimmer (replaces the old scene 1, same lesson plus the dimmer), interview, product, desert, living room, interrogation, car commercial, sunset, green screen. `?track=beta` still plays the four on their own. |
+
 ## Round 9: 2026-11-03 (ben, beta track, desktop browser)
 
 ben played the round 8 beta track. All fixes are in the beta track only, except where a row says "both tracks".

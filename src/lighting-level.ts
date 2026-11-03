@@ -65,9 +65,10 @@ import {
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
 import * as sfx from './sfx.js';
+import { checkPlacement } from './placement-check.js';
 
 /**
- * Runs Lucky Break: seven lighting scenes on one tabletop soundstage, and the
+ * Runs Lucky Break: ten lighting scenes on one tabletop soundstage, and the
  * story between them.
  *
  * Each scene (see levels.ts) builds its set pieces, seats the cast, and hands
@@ -96,6 +97,12 @@ const BOUNDS_BACK = -STAGE_DEPTH / 2 + 0.02;
 const BOUNDS_FRONT = STAGE_DEPTH / 2 + 0.14;
 const MIN_HEIGHT = 0.03;
 const MAX_HEIGHT = STAGE_HEIGHT - 0.02;
+/** The silk's lowest height: clear of a standing crew member's head (1.8 m = 0.13 on the 1:14 set). */
+const SILK_MIN_HEIGHT = 0.17;
+/** How long a take rolls after a win, "Action!" to "Cut!". */
+const TAKE_SECONDS = 5.5;
+/** When the action starts in a take (after the director calls it). */
+const ACTION_AT = 1.3;
 // Keeps lights from being pushed through the cast.
 const SUBJECT_CLEARANCE = 0.03;
 // A grab or click shorter than this, that barely moves the light, is a tap on its switch.
@@ -405,6 +412,13 @@ export class LightingLevelSystem extends createSystem({
   private phoneWheel = 0;
   /** The scene's own cast member hasn't loaded yet (the stand-in actor is sitting in). */
   private castPending = false;
+  /** Seconds since the camera rolled on this scene's take, or -1 before it rolls. */
+  private takeTime = -1;
+  private takeVoice = 0;
+  private directorChair?: Object3D;
+  private directorChairYaw = 0;
+  private directorTalkTime = 0;
+  private directorWobble = 0;
   /** The car commercial's real SUV model hasn't replaced the stand-in yet. */
   private carPending = false;
   private retakeTarget = false;
@@ -582,7 +596,10 @@ export class LightingLevelSystem extends createSystem({
       if (this.carPending && this.framesSinceLoad % 20 === 5) this.swapInCar();
       if (this.operatorPending && this.framesSinceLoad % 20 === 10) this.placeOperator();
       this.creature.update(delta);
+      this.updateTake(delta);
       this.updateScore(delta);
+      // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
+      if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
       this.phone.update(delta);
       this.scrollPhoneWithThumbstick(delta);
       this.placeHud(delta);
@@ -663,7 +680,38 @@ export class LightingLevelSystem extends createSystem({
           },
           level: () => ({ index: this.levelIndex, id: this.level.id, phase: this.phase }),
           loadLevel: (i: number) => this.loadLevel(i),
+          // Loads a scene by its id (tests use this so they survive scenes being reordered); returns its index or -1.
+          loadLevelId: (id: string) => {
+            const i = LEVELS.findIndex((l) => l.id === id);
+            if (i >= 0) this.loadLevel(i);
+            return i;
+          },
+          levelIds: () => LEVELS.map((l) => l.id),
+          // Physical mistakes in the current scene (people in walls or lights, floating crew...).
+          placement: () => {
+            const scene = this.world.scene;
+            const inCar = this.level.set === 'led-volume';
+            const cast = (this.actor?.visible ? [this.actor, ...this.extraActors] : this.extraActors).map((object, i) => ({ name: `cast member ${i + 1}`, object, inCar }));
+            const crew = ['director', 'sponsor', 'gaffer', 'crafty', 'operator']
+              .map((role) => ({ name: role === 'operator' ? 'the camera operator' : `the ${role}`, object: scene.getObjectByName(`crew-${role}-model`) }))
+              .filter((p): p is { name: string; object: Object3D } => Boolean(p.object));
+            return checkPlacement({
+              stage: this.stage,
+              people: [...cast, ...crew],
+              gear: this.fixtures.map((f) => ({ name: `the ${KIND_LABELS[f.item.kind]}`, object: f.object })),
+              outdoor: Boolean(this.level.outdoor),
+              floor: { minX: -(STAGE_WIDTH + 0.34) / 2, maxX: (STAGE_WIDTH + 0.34) / 2, minZ: -STAGE_DEPTH / 2, maxZ: STAGE_DEPTH / 2 + 0.23 },
+            });
+          },
           pressCard: () => this.pressCard(),
+          // Seconds into the take after a win (-1 before Roll); finishTake jumps to the Cut.
+          take: () => this.takeTime,
+          finishTake: () => {
+            if (this.takeTime >= 0 && this.takeTime < TAKE_SECONDS) {
+              this.takeTime = TAKE_SECONDS - 0.001;
+              this.updateTake(0.002);
+            }
+          },
           solve: () => this.solve(),
           practical: () => this.practical?.on,
           togglePractical: () => this.practical?.switch.toggle(),
@@ -715,8 +763,14 @@ export class LightingLevelSystem extends createSystem({
           phonePinned: () => this.phone.pinned,
           phoneScrolledBack: () => this.phone.scrolledBack,
           dee: (text: string) => this.phone.text('dee', text),
+          clearPhone: () => this.phone.clear(),
           // How far (radians) the director has turned from his resting pose, e.g. to look at you.
           directorTurn: () => (this.directorModel ? this.directorModel.rotation.y - this.directorYaw : null),
+          // How far his chair has turned (it turns with him), and his talking wobble (radians).
+          directorChairTurn: () => (this.directorChair ? this.directorChair.rotation.y - this.directorChairYaw : null),
+          directorWobble: () => (this.directorModel ? Math.abs(this.directorModel.rotation.z) + Math.abs(this.directorModel.rotation.x) : null),
+          directorSpeaking: () => this.bubble.speaking,
+          castSway: () => (this.actor?.visible ? [this.actor, ...this.extraActors] : this.extraActors).map((a) => Math.abs(a.rotation.z) + Math.abs(a.rotation.x)),
           // The camera operator's stage-local spot and the camera rig's, or null until his model loads.
           operator: () => {
             const op = this.cameraRig.getObjectByName('crew-operator-model');
@@ -783,6 +837,7 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
+    this.takeTime = -1;
     this.directorLooking = false;
     this.houseOn = this.level.houseStartsOn ?? true;
     this.houseEverOff = !this.houseOn;
@@ -809,6 +864,9 @@ export class LightingLevelSystem extends createSystem({
       }
     }
     this.backdrop.set(outdoor ? OUTDOOR_SKY : STUDIO_BACKDROP);
+    this.world.scene.traverse((child) => {
+      if (child.name === 'crew-mat') child.visible = !outdoor;
+    });
     this.set = createLevelSet(level.set);
     this.stage.add(this.set);
     this.greenScreen = (this.set.getObjectByName('green-screen') as Mesh | undefined) ?? undefined;
@@ -1110,11 +1168,15 @@ export class LightingLevelSystem extends createSystem({
         this.phone.text('dee', this.level.tip);
         break;
       case 'won':
-        if (this.levelIndex < LEVELS.length - 1) {
+        if (this.levelIndex === LEVELS.length - 1) {
+          this.rollFinale();
+          this.takeTime = 0;
+        } else if (this.takeTime < 0) {
+          // Every scene gets its take: Roll, a few seconds of action, Cut (ben, round 10).
+          this.startTake();
+        } else if (this.takeTime >= TAKE_SECONDS) {
           this.loadLevel(this.levelIndex + 1);
           this.phone.text('dee', this.level.tip);
-        } else {
-          this.rollFinale();
         }
         break;
       case 'rolled':
@@ -1201,6 +1263,19 @@ export class LightingLevelSystem extends createSystem({
     turn = Math.atan2(Math.sin(turn), Math.cos(turn));
     turn = MathUtils.clamp(turn, -1.3, 1.3);
     model.rotation.y = this.directorYaw + turn * this.directorBlend;
+    // His chair turns with him (ben, round 10): the chair lives in the crew props group.
+    if (!this.directorChair) {
+      this.directorChair = this.stage.getObjectByName('crew-director-props') ?? this.world.scene.getObjectByName('crew-director-props') ?? undefined;
+      if (this.directorChair) this.directorChairYaw = this.directorChair.rotation.y;
+    }
+    if (this.directorChair) this.directorChair.rotation.y = this.directorChairYaw + turn * this.directorBlend;
+    // A little wobble while he talks, so you can tell who is speaking.
+    this.directorTalkTime = this.bubble.speaking ? this.directorTalkTime + delta : 0;
+    const wobble = this.bubble.speaking ? Math.min(1, this.directorTalkTime * 4) : 0;
+    this.directorWobble += (wobble - this.directorWobble) * (1 - Math.exp(-delta * 8));
+    const t = this.directorTalkTime;
+    model.rotation.z = this.directorWobble * 0.05 * Math.sin(t * 7.3);
+    model.rotation.x = this.directorWobble * 0.035 * Math.sin(t * 11.1 + 1);
   }
 
   /** The director's next line, after the one he is saying. */
@@ -1267,7 +1342,7 @@ export class LightingLevelSystem extends createSystem({
     this.showPage({
       eyebrow: this.sceneLabel(),
       body: '',
-      button: last ? 'Roll!' : 'Next scene',
+      button: last ? 'Roll!' : 'Roll',
     });
     // Dee explains what you just did, then the gossip.
     this.phone.text('dee', this.level.lesson);
@@ -1275,6 +1350,68 @@ export class LightingLevelSystem extends createSystem({
       this.phone.text('dee', this.level.after);
     }
     this.sayToYou(last ? '"Okay. Okay. Everybody quiet. Roll it."' : (this.level.directorWin ?? this.pickDirectorLine()), true);
+  }
+
+  /** The camera rolls on a won scene: the director calls action and the set comes alive. */
+  private startTake(): void {
+    this.takeTime = 0;
+    this.takeVoice = 0;
+    // He turns back to watch the set.
+    this.directorLooking = false;
+    devLog('take rolling');
+    this.say('"Roll camera... and... ACTION!"');
+    this.showPage({ eyebrow: 'Rolling', body: '' });
+    this.ipad.setStatus(100, '', true);
+  }
+
+  /**
+   * What happens on set during a take: the cast talk (sway and a "wa-wa" voice), the LED
+   * wall scrolls the highway past the car, a tumbleweed blows across the desert. Cut after
+   * TAKE_SECONDS, then the Next scene button.
+   */
+  private updateTake(delta: number): void {
+    if (this.takeTime < 0) return;
+    const before = this.takeTime;
+    this.takeTime += delta;
+    const t = this.takeTime - ACTION_AT;
+    const acting = t > 0 && this.takeTime < TAKE_SECONDS;
+    const cast = this.actor?.visible ? [this.actor, ...this.extraActors] : this.extraActors;
+    cast.forEach((person, i) => {
+      // The cast take turns: each one talks for a beat.
+      const talking = acting && Math.floor(t / 1.4) % Math.max(1, cast.length) === i;
+      const amount = talking ? 1 : 0;
+      person.rotation.z = amount * 0.035 * Math.sin(t * 6.1 + i);
+      person.rotation.x = amount * 0.03 * Math.sin(t * 9.3 + i * 2);
+    });
+    if (acting && Math.floor(t / 1.4) !== this.takeVoice - 1) {
+      this.takeVoice = Math.floor(t / 1.4) + 1;
+      sfx.mumble('wa wa wa wa wa', 210);
+    }
+    const set = this.set;
+    if (set && acting) {
+      const wall = set.getObjectByName('led-wall') as Mesh | undefined;
+      const map = (wall?.material as MeshBasicMaterial | undefined)?.map;
+      // The car drives camera-left, so the world streams past to the right.
+      if (map) map.offset.x -= delta * 0.09;
+      const car = set.getObjectByName('car');
+      if (car) {
+        car.position.y = 0.0006 * Math.sin(t * 17);
+        // The wheels spin as if it's driving (the real SUV model lists them).
+        for (const wheel of (car.userData.wheels as Object3D[] | undefined) ?? []) wheel.rotation.x -= delta * 14;
+      }
+      const weed = set.getObjectByName('tumbleweed');
+      if (weed) {
+        weed.visible = true;
+        // Across the back of the shot, bouncing, in about four seconds.
+        weed.position.x = -0.3 + t * 0.14;
+        weed.position.y = 0.02 + Math.abs(Math.sin(t * 4.5)) * 0.014;
+        weed.rotation.z = -t * 6;
+      }
+    }
+    if (before < TAKE_SECONDS && this.takeTime >= TAKE_SECONDS && this.phase === 'won') {
+      this.say('"...CUT! That\'s a print. Moving on."');
+      this.showPage({ eyebrow: this.sceneLabel(), body: '', button: 'Next scene' });
+    }
   }
 
   private rollFinale(): void {
@@ -1316,7 +1453,7 @@ export class LightingLevelSystem extends createSystem({
       title: 'LUCKY BREAK',
       body: IS_BETA
         ? 'Beta track complete. Dimmers, an overhead silk, a bounce card and an LED volume: all yours.'
-        : 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
+        : 'Starring you, formerly Background Extra #47, now Gaffer. Dimmers, key, fill, back light, product, a desert silk, practicals, low-key, an LED volume, magic hour and green screen: all yours.',
       footer: 'A film by ben, lit by you, built by Claude.',
       button: 'Play again',
     });
@@ -1591,13 +1728,15 @@ export class LightingLevelSystem extends createSystem({
       }
       fixture.grabTime = 0;
     }
-    this.clampToSet(fixture.local);
+    this.clampToSet(fixture.local, fixture.item.kind);
     this.placeFixture(fixture);
   }
 
-  private clampToSet(local: Vector3): void {
+  private clampToSet(local: Vector3, kind?: FixtureKind): void {
     local.x = MathUtils.clamp(local.x, -BOUNDS_X, BOUNDS_X);
-    local.y = MathUtils.clamp(local.y, MIN_HEIGHT, MAX_HEIGHT);
+    // The overhead silk always flies above everyone's heads, parked or rigged, so its
+    // frame never cuts through the cast or crew (ben, round 10: "the silk is going through people").
+    local.y = MathUtils.clamp(local.y, kind === 'silk' ? SILK_MIN_HEIGHT : MIN_HEIGHT, MAX_HEIGHT);
     local.z = MathUtils.clamp(local.z, BOUNDS_BACK, BOUNDS_FRONT);
     // Push the light out of the cast if it was dropped on top of them.
     for (const actor of this.level.actors) {

@@ -38,9 +38,9 @@ const TRIALS = Number(process.env.TRIALS || 6);
         [/closer to the screen/, 2, -1],
         [/away from the screen/, 2, 1],
       ];
-      // Main track: scene 2 starts set up, so there's nothing to place. Beta track: 1B is dimmers only
-      // (scripts/beta-track.cjs plays that one); the rest get placed.
-      const scenes = ll.beta() ? [1, 2, 3] : [0, 2, 3, 4, 5, 6];
+      // The tutorial is dimmers only and the interview starts set up: nothing to place there.
+      const ids = ll.levelIds();
+      const scenes = ids.map((id, i) => i).filter((i) => !['beta-1-tutorial', 'interview'].includes(ids[i]));
       for (const scene of scenes) {
         const runs = [];
         for (let t = 0; t < TRIALS; t++) {
@@ -59,7 +59,7 @@ const TRIALS = Number(process.env.TRIALS || 6);
             } while (ll.inFrame() && ++tries < 200);
             if (ll.inFrame()) throw new Error(`scene ${scene + 1}: can't knock light ${i} anywhere out of the shot (is its spot in frame?)`);
           }
-          const win = ll.beta() ? ({ 1: 90 }[scene] ?? 85) : ({ 0: 90 }[scene] ?? 85);
+          const win = ids[scene] === 'beta-2-key-dimmer' ? 90 : 85;
           let steps = 0;
           let reversals = 0;
           let switches = 0; // the tip changed direction (left-right / height / distance)

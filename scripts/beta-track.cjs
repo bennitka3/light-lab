@@ -27,7 +27,8 @@ const { chromium } = require('playwright');
   await page.goto(base);
   await page.waitForFunction(() => window.lightLab, null, { timeout: 60000 });
   check((await ll('beta')) === false, 'main URL is not the beta track');
-  check((await ll('level')).id === 'social-clip', 'main URL starts on the usual scene 1');
+  check((await ll('level')).id === 'beta-1-tutorial', 'main URL starts on the dimmer tutorial');
+  check((await ll('levelIds')).length === 10, 'main playthrough has ten scenes');
 
   await page.goto(`${base}?track=beta`);
   await page.waitForFunction(() => window.lightLab, null, { timeout: 60000 });
@@ -89,6 +90,10 @@ const { chromium } = require('playwright');
   check(houseLast, 'the house-lights tip only comes once every dimmer is right');
   check(lv.phase === 'won', `tutorial won by following the tip with iPad clicks only (${clicks} clicks)`);
   await page.screenshot({ path: `${out}/beta-1-won.png` });
+  await ll('pressCard'); // Roll
+  await page.waitForTimeout(800);
+  await ll('finishTake');
+  await page.waitForTimeout(400);
   await ll('pressCard');
   await page.waitForTimeout(1500);
 
@@ -123,6 +128,12 @@ const { chromium } = require('playwright');
     lv = await ll('level');
     check(lv.phase === 'won', `scene ${n} wins when solved (score ${await ll('score')})`);
     await page.screenshot({ path: `${out}/beta-${n}-won.png` });
+    if (n < 4) {
+      await ll('pressCard'); // Roll
+      await page.waitForTimeout(800);
+      await ll('finishTake');
+      await page.waitForTimeout(400);
+    }
     await ll('pressCard');
     await page.waitForTimeout(1500);
   }

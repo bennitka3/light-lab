@@ -57,7 +57,7 @@ export function textChime(): void {
  * The director's voice: a muted-trumpet "wah-wah", one syllable for every
  * couple of words, capped at a few seconds so long lines don't drone.
  */
-export function mumble(line: string): void {
+export function mumble(line: string, pitchHz = 150): void {
   played.voice += 1;
   const ac = ready();
   if (!ac || !master) return;
@@ -75,7 +75,7 @@ export function mumble(line: string): void {
   let t = t0;
   for (let i = 0; i < syllables; i++) {
     const length = 0.13 + Math.random() * 0.12;
-    const pitch = 150 + Math.random() * 45 - (i === syllables - 1 ? 30 : 0);
+    const pitch = pitchHz + Math.random() * 45 - (i === syllables - 1 ? 30 : 0);
     osc.frequency.setValueAtTime(pitch, t);
     osc.frequency.linearRampToValueAtTime(pitch * 0.92, t + length);
     // The "wah": the filter opens and closes like a plunger mute.

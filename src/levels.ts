@@ -1,7 +1,7 @@
 import type { FixtureKind } from './scene-assets/soundstage.scene-asset.js';
 
 /**
- * The seven scenes of Lucky Break, as data. Each scene says which set pieces
+ * The scenes of Lucky Break, as data. Each scene says which set pieces
  * to build, where the cast sits, which lights are in the kit, and which
  * "roles" the lights must fill to match the director's target shot.
  *
@@ -104,7 +104,8 @@ const HEAD = 0.105;
 const SOFT_KEY = 'a big soft source (the softbox)';
 const HARD = 'a hard light (Fresnel or PAR)';
 
-export const LEVELS: LevelDef[] = [
+/** The original seven scenes (round 1-7). The main track below now mixes in the beta scenes. */
+export const CLASSIC_LEVELS: LevelDef[] = [
   {
     id: 'social-clip',
     title: 'Social clip',
@@ -487,12 +488,37 @@ export const BETA_LEVELS: LevelDef[] = [
     objective: 'The LED wall already lights them from behind. Add a big soft top light for the paint, and a key through the windows at half power.',
     lesson: 'On an LED volume the wall is your background and your ambient light. Add a big soft source for the paint and a gentle key for faces.',
     directorWin: '"Somebody get that dog an agent."',
-    after: '',
+    after: 'the dog has more followers than you now. and you\'re in this business 🐶',
     tip: 'softbox high over the car. LED panel low, front-left, at half',
   },
 ];
 
-/** The scenes this visit plays: the beta track with ?track=beta in the address, otherwise the seven scenes. */
+const scene = (id: string): LevelDef => {
+  const found = [...CLASSIC_LEVELS, ...BETA_LEVELS].find((level) => level.id === id);
+  if (!found) throw new Error(`no scene ${id}`);
+  return found;
+};
+
+/**
+ * The main playthrough (ben, round 10: "add these levels in sequence to the normal playthrough").
+ * The dimmer tutorial comes first; the one-light-with-a-dimmer scene takes the old social
+ * clip's place (same lesson, plus the dimmer); the desert and the car commercial slot in
+ * where they raise the difficulty; Lake Como stays the finale.
+ */
+export const LEVELS: LevelDef[] = [
+  scene('beta-1-tutorial'),
+  scene('beta-2-key-dimmer'),
+  scene('interview'),
+  scene('product'),
+  scene('beta-3-desert'),
+  scene('living-room'),
+  scene('interrogation'),
+  scene('beta-4-car'),
+  scene('sunset'),
+  scene('restaurant'),
+];
+
+/** The scenes this visit plays: the beta track's four with ?track=beta in the address, otherwise the main playthrough. */
 export const IS_BETA =
   typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('track') === 'beta';
 export const TRACK_LEVELS: LevelDef[] = IS_BETA ? BETA_LEVELS : LEVELS;
