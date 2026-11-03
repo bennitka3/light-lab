@@ -233,7 +233,8 @@ const { chromium } = require('playwright');
   check('Dee no longer relays the director', !t5.some((t) => /squinted/.test(t)));
   check('the iPad tip is quiet on a win', (await api(() => window.lightLab.card())).body === '');
 
-  // Round 5. House-light hints: "turn them off!" until cut once; after that, leaving them on is on purpose.
+  // Round 5, changed in round 9: the house lights help you see while you place lights, so the
+  // tip doesn't ask for them off at the start (only once everything else is right).
   await api(() => window.lightLab.loadLevel(0));
   await wait(500);
   const hh1 = (await state()).hint;
@@ -243,7 +244,7 @@ const { chromium } = require('playwright');
   await page.mouse.click(house.x, house.y);
   await wait(500);
   const hh2 = (await state()).hint;
-  check('house hint says "Turn them off!", then goes quiet once you have cut them', /Turn them off!/.test(hh1) && !/house/i.test(hh2) && (await api(() => window.lightLab.houseOn())), { hh1, hh2 });
+  check('the tip leaves the house lights alone at the start, on or off', !/house/i.test(hh1) && !/house/i.test(hh2) && (await api(() => window.lightLab.houseOn())), { hh1, hh2 });
 
   // Round 5. Dee's chat scrolls back: mouse wheel over the phone.
   for (let k = 0; k < 6; k++) await api((n) => window.lightLab.dee(`test text number ${n}, long enough to wrap onto a second line`), k);

@@ -31,16 +31,16 @@ const TRIALS = Number(process.env.TRIALS || 6);
       const moves = [
         [/camera-left/, 0, -1],
         [/camera-right/, 0, 1],
-        [/back, away from the camera|round the back/, 2, -1],
-        [/forward, toward the camera/, 2, 1],
+        [/back, deeper into the set|round the back/, 2, -1],
+        [/forward, toward you/, 2, 1],
         [/Raise/, 1, 1],
         [/Lower/, 1, -1],
         [/closer to the screen/, 2, -1],
         [/away from the screen/, 2, 1],
       ];
       // Main track: scene 2 starts set up, so there's nothing to place. Beta track: 1B is dimmers only
-      // (scripts/beta-track.cjs plays that one), so only the desert and the car get placed.
-      const scenes = ll.beta() ? [1, 2] : [0, 2, 3, 4, 5, 6];
+      // (scripts/beta-track.cjs plays that one); the rest get placed.
+      const scenes = ll.beta() ? [1, 2, 3] : [0, 2, 3, 4, 5, 6];
       for (const scene of scenes) {
         const runs = [];
         for (let t = 0; t < TRIALS; t++) {
@@ -57,9 +57,10 @@ const TRIALS = Number(process.env.TRIALS || 6);
               p.y = Math.max(0.03, home.y + rand() * 0.05);
             } while (ll.inFrame());
           }
-          const win = ll.beta() ? 85 : ({ 0: 90 }[scene] ?? 85);
+          const win = ll.beta() ? ({ 1: 90 }[scene] ?? 85) : ({ 0: 90 }[scene] ?? 85);
           let steps = 0;
           let reversals = 0;
+          let switches = 0; // the tip changed direction (left-right / height / distance)
           let last = null;
           const seen = [];
           for (; steps < MAX_STEPS; steps++) {
@@ -73,6 +74,7 @@ const TRIALS = Number(process.env.TRIALS || 6);
             }
             const [, axis, sign] = move;
             if (last && last[0] === axis && last[1] === -sign) reversals++;
+            if (last && last[0] !== axis) switches++;
             last = [axis, sign];
             const i = ll.hintFixture();
             if (i < 0) break;
@@ -80,7 +82,7 @@ const TRIALS = Number(process.env.TRIALS || 6);
             p[['x', 'y', 'z'][axis]] += sign * (/Nudge|a little/.test(hint) ? STEP / 2 : STEP);
             if (p.y < 0.02) p.y = 0.02;
           }
-          runs.push({ won: ll.score() >= win, steps, reversals, lastHint: ll.hint(), score: ll.score(), tail: seen.slice(-4) });
+          runs.push({ won: ll.score() >= win, steps, reversals, switches, lastHint: ll.hint(), score: ll.score(), tail: seen.slice(-4) });
         }
         out.push({ scene: scene + 1, runs });
       }
@@ -94,7 +96,8 @@ const TRIALS = Number(process.env.TRIALS || 6);
     const won = runs.filter((r) => r.won).length;
     const avgSteps = (runs.reduce((s, r) => s + r.steps, 0) / runs.length).toFixed(1);
     const rev = runs.reduce((s, r) => s + r.reversals, 0);
-    console.log(`scene ${scene}: won ${won}/${runs.length}, avg steps ${avgSteps}, tip reversals ${rev}`);
+    const sw = (runs.reduce((s, r) => s + r.switches, 0) / runs.length).toFixed(1);
+    console.log(`scene ${scene}: won ${won}/${runs.length}, avg steps ${avgSteps}, tip reversals ${rev}, direction changes per run ${sw}`);
     for (const r of runs.filter((r) => !r.won)) {
       fails++;
       console.log(`   stuck at ${r.score}% after ${r.steps} steps: ${JSON.stringify(r.tail)}`);

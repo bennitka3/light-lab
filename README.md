@@ -28,9 +28,10 @@ the "next" button.
 `?scene=N` in the URL jumps straight to scene N (1-7), for testing or for
 picking up where you left off.
 
-`?track=beta` plays the experimental beta track instead (three scenes: 1B,
-dimmers only on a rigged three-point setup; a desert at noon with an overhead
-silk and a bounce card; a car commercial on an LED volume). It never changes
+`?track=beta` plays the experimental beta track instead (four scenes: a
+dimmer tutorial on a rigged three-point setup; one key light you place and dim;
+an outdoor desert at noon with an overhead silk and a bounce card; a car
+commercial on an LED volume). It never changes
 the seven scenes. `?track=beta&scene=2` jumps within it.
 
 ## Controls
@@ -55,8 +56,8 @@ test API that the production build leaves out):
 - `node scripts/smoke-test.cjs` drives scene 1 with real mouse input.
 - `node scripts/playthrough.cjs` plays title to credits (about 4 minutes in
   software rendering).
-- `node scripts/beta-track.cjs` plays the beta track (1B by clicking only the
-  iPad's dimmers) and checks the main track is untouched.
+- `node scripts/beta-track.cjs` plays the beta track (the tutorial by clicking
+  only the iPad's dimmers, house lights last) and checks the main track is untouched.
 - `node scripts/follow-hints.cjs [url]` plays by following the tips; give it a
   `?track=beta` URL for the beta scenes.
 
@@ -69,6 +70,8 @@ GitHub Pages (`.github/workflows/pages.yml`).
 - `src/scene-assets/set-dressing.ts`: director's chair, C-stand, sandbags, apple boxes, cables, tape marks.
 - `public/models/actor-seated.glb`: the cast member, a [Microsoft Rocketbox](https://github.com/microsoft/Microsoft-Rocketbox)
   avatar (MIT license) posed seated and baked in Blender; its `subject-head` node is what the lights aim at.
+- `public/models/car-suv.glb`: the beta car commercial's SUV, the "suv" from Kenney's
+  [Car Kit](https://kenney.nl/assets/car-kit) (CC0, public domain), repainted in `beta-sets.ts`.
 - `src/levels.ts`: the seven scenes as data (cast, kit, the roles lights must fill, story text).
 - `src/scene-assets/level-sets.ts`: each scene's set pieces (bookshelf, perfume bottle, lamp, green screen...).
 - `src/lighting-level.ts`: the game: scene flow, lights, house switch, monitor, scoring, hints, controls.

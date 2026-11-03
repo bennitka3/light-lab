@@ -3,6 +3,33 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 9: 2026-11-03 (ben, beta track, desktop browser)
+
+ben played the round 8 beta track. All fixes are in the beta track only, except where a row says "both tracks".
+
+| ben said | Status |
+|---|---|
+| "outdoor scenes shouldn't have studio walls... an outdoor map with fade-out boundaries" | **Done.** The desert hides the studio walls, floor and grid. Its own ground is a round patch that fades out at the edges into the sky colour, with mesas, rocks and cacti. |
+| Dee's notes "kick previous notes off the screen too fast"; "scroll smoothly"; "short and useful", keep her personality | **Done (both tracks).** The phone scrolls smoothly (older texts slide up). Texts wait about 0.25 s per word, between 1.2 and 5 s, before the next one. Dee's stuck-nudges are the tip itself in her lowercase voice. |
+| "a bounce is a static object, not a light you turn on" / "you should not have to turn on the silk either lol" | **Done.** The silk and the bounce have no switch. They count once you drag them past the tape onto the set. The silk now stands on two legs. |
+| "the director is halfway through the wall" | **Fixed (both tracks).** He moved forward and turned to face the set. |
+| "nudge it back away from the camera" was confusing when the camera was forward of the bounce | **Fixed (both tracks).** Tips say "back, deeper into the set" or "forward, toward you", as you see the set. "from here:" is gone. |
+| "the bounce was on screen and I still won" | **Fixed.** The bounce and silk count for the in-shot check like any other light. |
+| "the Next scene button and the light buttons are slow" | **Fixed (both tracks).** The game prepares every lighting combination while you read the first card, so a switch no longer stalls. Checked by counting shader programs: it stays at 69 across switches. |
+| "the car needs a much better model" (picked: free model first) | **Done.** Kenney's Car Kit SUV (CC0, free), repainted deep red with see-through windows; the dog still hangs out the back window. Still low-poly. A paid photoreal model is the next step if this isn't enough. |
+| "killing the house lights should be part of the first level" | **Done.** The tutorial starts with the house lights on and wins only once they're off. |
+| The tips flip-flopped (right, left, back). "stay with one axis... then focus on the other axis... then come back for a correction. you can test this with bots" | **Fixed (both tracks).** The tip keeps one direction until a step that way stops helping, says "Height looks good" and moves on, and only returns to a finished direction for a correction. Bots: every main-track scene wins 6/6, scene 7 tip reversals went from 11 to 3. |
+| House lights late in the game: the tip should say "too much ambient light", then Dee says "THE HOUSE LIGHTS" | **Done** in the car scene: the tip says "Looks right, but there's too much ambient light." After a while Dee texts "wait. THE HOUSE LIGHTS 😱". |
+| "advising cutting the house lights before moving anything is kinda annoying" | **Fixed (both tracks).** The house-lights tip only comes when everything else is right. Dee only nags after the house lights have been on for a while *and* you've been working the lights. |
+| The brightness-only level is "more of a tutorial": put it first, then a level with movement plus brightness for one light | **Done.** Beta order: 1 dimmer tutorial, 2 one key light you place and dim, 3 desert, 4 car. |
+| "there's some overlap on this title" | **Fixed.** The iPad's TARGET label is smaller and cuts off with "…" before it reaches YOUR SHOT. |
+
+### Backlog from round 9
+
+- **Result-only level (harder):** show only the result, not which fix to make (for example, closer vs brighter both brighten the face). ben's idea.
+- **Silk and bounce as a tutorial that comes back later:** ben liked the sets, silk and bounce; reuse them in a later main-track scene.
+- **First person with controller movement, demoed on one level:** ben's question. Recommendation: try it on one beta scene with teleport and snap-turn (the comfortable VR default), keep the tabletop view elsewhere.
+
 ## Round 8: 2026-11-03 (Greg's audio notes, after playing; ben's direction)
 
 Greg (ben's friend, the round 7 tester; teaches a product-video lighting class) sent two voice notes. ben's call: try his ideas as a **separate beta track** that doesn't touch the seven scenes. Open it with `?track=beta` (add `&scene=N` to jump). Test: `scripts/beta-track.cjs`; `scripts/follow-hints.cjs` also takes a `?track=beta` URL.

@@ -1,6 +1,7 @@
 import {
   BoxGeometry,
   CanvasTexture,
+  CircleGeometry,
   CylinderGeometry,
   DirectionalLight,
   DodecahedronGeometry,
@@ -10,6 +11,8 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  NoColorSpace,
+  Object3D,
   PlaneGeometry,
   SphereGeometry,
   SRGBColorSpace,
@@ -52,42 +55,6 @@ function paintTexture(width: number, height: number, paint: (ctx: CanvasRenderin
 
 // --- Desert at noon -----------------------------------------------------------
 
-function paintDesertSky(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  const sky = ctx.createLinearGradient(0, 0, 0, h * 0.7);
-  sky.addColorStop(0, '#5f9fd8');
-  sky.addColorStop(1, '#dcecf7');
-  ctx.fillStyle = sky;
-  ctx.fillRect(0, 0, w, h);
-  // Mesas on the horizon, then the desert floor.
-  ctx.fillStyle = '#b8794a';
-  ctx.beginPath();
-  ctx.moveTo(0, h * 0.7);
-  const tops: [number, number, number][] = [
-    [0.08, 0.2, 0.5],
-    [0.35, 0.12, 0.56],
-    [0.62, 0.16, 0.48],
-    [0.85, 0.1, 0.58],
-  ];
-  for (const [x, half, top] of tops) {
-    ctx.lineTo((x - half - 0.04) * w, h * 0.7);
-    ctx.lineTo((x - half) * w, h * top);
-    ctx.lineTo((x + half) * w, h * top);
-    ctx.lineTo((x + half + 0.04) * w, h * 0.7);
-  }
-  ctx.lineTo(w, h * 0.7);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = '#9a5f38';
-  for (const [x, half, top] of tops) {
-    ctx.fillRect((x - half) * w, h * top, half * w * 2, h * 0.012);
-  }
-  const ground = ctx.createLinearGradient(0, h * 0.7, 0, h);
-  ground.addColorStop(0, '#d8b98a');
-  ground.addColorStop(1, '#e6c99a');
-  ctx.fillStyle = ground;
-  ctx.fillRect(0, h * 0.7, w, h * 0.3);
-}
-
 /** A saguaro: a trunk and two arms, about 0.12 tall. */
 function createCactus(material: MeshStandardMaterial, height: number): Group {
   const cactus = new Group();
@@ -113,22 +80,37 @@ function createCactus(material: MeshStandardMaterial, height: number): Group {
 
 function createDesertSet(): Group {
   const set = new Group();
-  // Painted sky on the back wall and both side walls, so the walls disappear.
-  const sky = paintTexture(1024, 600, (ctx) => paintDesertSky(ctx, 1024, 600));
-  const skyMaterial = new MeshBasicMaterial({ map: sky, toneMapped: false });
-  const back = new Mesh(new PlaneGeometry(STAGE_WIDTH - 0.01, STAGE_HEIGHT - 0.01), skyMaterial);
-  back.position.set(0, STAGE_HEIGHT / 2, BACK_WALL_Z + 0.001);
-  set.add(back);
-  for (const side of [-1, 1]) {
-    const wall = new Mesh(new PlaneGeometry(STAGE_DEPTH - 0.01, STAGE_HEIGHT - 0.01), skyMaterial);
-    wall.position.set(side * (STAGE_WIDTH / 2 - 0.007), STAGE_HEIGHT / 2, 0);
-    wall.rotation.y = -side * (Math.PI / 2);
-    set.add(wall);
+  // Outdoors: no walls. A round patch of desert that fades out at its edges, so
+  // in passthrough it sits in your room like a map, and in the browser it melts
+  // into a hazy sky (ben, round 9: "fade-out boundaries for the AR vibe").
+  const fade = paintTexture(256, 256, (ctx) => {
+    const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.68, '#ffffff');
+    g.addColorStop(1, '#000000');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+  });
+  fade.colorSpace = NoColorSpace;
+  const ground = new Mesh(
+    new CircleGeometry(0.56, 64),
+    new MeshStandardMaterial({ color: '#d9b98a', roughness: 0.95, alphaMap: fade, transparent: true }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = 0.0005;
+  ground.receiveShadow = true;
+  ground.name = 'desert-ground';
+  set.add(ground);
+  // Mesas on the horizon, inside the solid part of the ground.
+  const mesa = mat('#b8794a', 0.95);
+  for (const [x, z, w, h, d] of [
+    [-0.24, -0.3, 0.16, 0.07, 0.06],
+    [0.02, -0.34, 0.12, 0.1, 0.05],
+    [0.25, -0.29, 0.14, 0.06, 0.06],
+  ]) {
+    set.add(block(w, h, d, mesa, x, h / 2, z));
+    set.add(block(w * 1.08, 0.006, d * 1.05, mat('#9a5f38', 0.95), x, h - 0.002, z));
   }
-  // Sand, with a few darker drifts.
-  const sand = mat('#d9b98a', 0.95);
-  const floor = block(STAGE_WIDTH - 0.01, 0.001, STAGE_DEPTH - 0.01, sand, 0, 0.0005, 0, false);
-  set.add(floor);
   const drift = mat('#c9a676', 0.95);
   for (const [x, z, sx, sz] of [
     [-0.14, -0.12, 0.08, 0.04],
@@ -398,6 +380,54 @@ function createCar(): Group {
   const seat = mat('#2a2a2e', 0.9);
   car.add(block(0.006, 0.05, W - 0.02, seat, -0.018, 0.075, 0));
   car.add(block(0.006, 0.045, W - 0.02, seat, 0.07, 0.072, 0));
+  return car;
+}
+
+/**
+ * The real SUV (Kenney Car Kit, CC0) dressed for the commercial: deep red metallic
+ * paint, see-through glass so the family shows, sized to the stand-in's spot.
+ * `model` is the loaded glTF scene; its geometry stays shared with the cache
+ * (userData.sharedGeometry), only the materials are copied.
+ */
+export function fitCarModel(model: Object3D): Group {
+  const car = new Group();
+  car.name = 'car';
+  const clone = model.clone(true);
+  // Kenney's car points down -z with its width on x: turn it to point camera-left (-x),
+  // and stretch it a little longer and lower than the toy proportions.
+  clone.rotation.y = Math.PI / 2;
+  clone.scale.set(0.087, 0.1, 0.112);
+  const paint = new MeshStandardMaterial({ color: '#8f1d1d', roughness: 0.22, metalness: 0.55 });
+  const glass = new MeshStandardMaterial({ color: '#9fb4c4', roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.18, depthWrite: false });
+  clone.traverse((child) => {
+    // Smaller wheels (the kit's are toy-sized), still on the floor: radius 0.3 at y 0.3.
+    if (/^wheel_(front|back)(Left|Right)$/.test(child.name) && !(child instanceof Mesh)) {
+      child.scale.multiplyScalar(0.85);
+      child.position.y -= 0.3 * 0.15;
+    }
+    if (!(child instanceof Mesh)) return;
+    child.userData.sharedGeometry = true;
+    child.castShadow = true;
+    child.receiveShadow = true;
+    const swap = (m: MeshStandardMaterial): MeshStandardMaterial => {
+      if (m.name.startsWith('paint')) return paint;
+      if (m.name === 'window') return glass;
+      const copy = m.clone();
+      if (m.name === 'lightFront') {
+        copy.emissive.set('#fff6dd');
+        copy.emissiveIntensity = 1.2;
+      } else if (m.name === 'lightBack') {
+        copy.emissive.set('#ff2a2a');
+        copy.emissiveIntensity = 0.8;
+      }
+      return copy;
+    };
+    child.material = Array.isArray(child.material)
+      ? child.material.map((m) => swap(m as MeshStandardMaterial))
+      : swap(child.material as MeshStandardMaterial);
+    if ((Array.isArray(child.material) ? child.material : [child.material]).includes(glass)) child.castShadow = false;
+  });
+  car.add(clone);
   return car;
 }
 

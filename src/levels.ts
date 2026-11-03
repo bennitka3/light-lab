@@ -91,6 +91,13 @@ export type LevelDef = {
   texts?: Text[];
   /** The lights are rigged in place: they can be switched and dimmed but not moved. */
   locked?: boolean;
+  /** Shot outdoors: no studio walls, grid or house lights; the ground fades out at the edges. */
+  outdoor?: boolean;
+  /**
+   * 'ambient': the house lights are a quiet gotcha. Tips keep placing the lights
+   * and only say "too much ambient light"; Dee eventually texts THE HOUSE LIGHTS.
+   */
+  houseHint?: 'ambient';
 };
 
 const HEAD = 0.105;
@@ -345,17 +352,20 @@ export const LEVELS: LevelDef[] = [
  * The experimental track (ben, 2026-11-03, after Greg's notes): open it with
  * ?track=beta. It never touches the seven scenes above.
  *
- *  1B: the lights are already set up; you only dial their brightness (Greg:
- *      start with intensity on a three-point setup, build up to placement).
- *  2:  a desert at high noon with two people: an overhead silk softens the
- *      harsh sun, a bounce card fills the shadows.
- *  3:  a car commercial on an LED volume: a family and their dog (head out
- *      the window) in an SUV in front of a wraparound LED wall.
+ *  1: tutorial. The lights are already rigged; kill the house lights, then
+ *     only dial their brightness (Greg: start with intensity, build up to
+ *     placement). ben, round 9: "more of a tutorial level than a level level".
+ *  2: the usual scene 1 (move one soft key), plus its dimmer.
+ *  3: a desert at high noon, outdoors (no studio walls): an overhead silk
+ *     softens the harsh sun, a bounce card fills the shadows. These two are
+ *     shapers, not lights: no switch, they work once they're on the set.
+ *  4: a car commercial on an LED volume: a family and their dog in an SUV in
+ *     front of a wraparound LED wall. The house lights are a quiet gotcha here.
  */
 export const BETA_LEVELS: LevelDef[] = [
   {
-    id: 'beta-1b-dimmers',
-    title: '1B: Dial it in',
+    id: 'beta-1-tutorial',
+    title: 'Tutorial: dial it in',
     set: 'studio',
     actors: [{ pos: [0, 0, -0.06] }],
     directorsChair: true,
@@ -368,7 +378,6 @@ export const BETA_LEVELS: LevelDef[] = [
       { kit: 2, az: 150, el: 45, d: 0.14, dimmer: 1 },
     ],
     locked: true,
-    houseStartsOn: false,
     roles: [
       { id: 'key', label: 'Key light', kinds: ['softbox'], kindHint: SOFT_KEY, orbit: { az: -45, el: 30, d: 0.16 }, level: 1 },
       { id: 'fill', label: 'Fill light', kinds: ['panel'], kindHint: 'a dimmer soft source (the LED panel)', orbit: { az: 45, el: 10, d: 0.19 }, level: 0.4 },
@@ -376,17 +385,43 @@ export const BETA_LEVELS: LevelDef[] = [
     ],
     // Every dimmer exactly right: one light a single stop off reads 95% and does not win.
     winScore: 96,
-    quote: '"The lights are already up. The real gaffer rigged them, then fiddled with every dimmer and walked out."',
-    objective: 'Don\'t move anything. Just set how bright each light is so the shot matches.',
-    lesson: 'Three-point lighting is about ratios: the key is the brightest, the fill about half as bright, the back light just enough to outline him.',
+    quote: '"You! Lighting! The gaffer rigged these, then fiddled with every dimmer and walked out."',
+    objective: 'Don\'t move anything. Just set how bright each light is, then kill the house lights and roll.',
+    lesson: 'Key = brightest. Fill = about half. Back = just enough to outline him. That\'s three-point lighting.',
     directorWin: '"...Hm. You. Stick around."',
     after: 'did the director just TALK to you?? he never talks to anyone 👀',
-    tip: 'Lights are already rigged, don\'t touch the stands. Use ◀ ▶ under each light on the iPad. Key = brightest, fill = about half, back = just enough to outline his hair.',
+    tip: '◀ ▶ under each light on the iPad sets how bright it is. don\'t touch the stands. house lights off at the end',
   },
   {
-    id: 'beta-2-desert',
+    id: 'beta-2-key-dimmer',
+    title: 'Social clip, with a dimmer',
+    set: 'studio',
+    actors: [{ pos: [0, 0, -0.06] }],
+    directorsChair: true,
+    camera: { x: 0, z: 0.14, fov: 26 },
+    kit: [{ kind: 'fresnel' }, { kind: 'softbox', dimmer: true }, { kind: 'par' }],
+    roles: [
+      {
+        id: 'key',
+        label: 'Key light',
+        kinds: ['softbox'],
+        kindHint: SOFT_KEY,
+        orbit: { az: -45, el: 35, d: 0.16 },
+        level: 0.7,
+      },
+    ],
+    winScore: 90,
+    quote: '"New setup. Same guy. This time you place the light."',
+    objective: 'One soft key: 45° to the side, a bit above the eyes. Then set its brightness.',
+    lesson: 'Place it first, then dim it. Moving a light closer also makes it brighter, so get the spot right before you touch the dimmer.',
+    after: 'ok you can MOVE lights now. who even are you',
+    tip: 'softbox = your key. front-left of him, a bit above his eyes. then the dimmer',
+  },
+  {
+    id: 'beta-3-desert',
     title: 'Desert at noon',
     set: 'desert',
+    outdoor: true,
     // Two hikers sitting on a rock, side by side.
     actors: [{ pos: [-0.028, 0, -0.06], rotY: 0.15 }, { pos: [0.028, 0, -0.06], rotY: -0.15 }],
     directorsChair: false,
@@ -398,7 +433,7 @@ export const BETA_LEVELS: LevelDef[] = [
         id: 'silk',
         label: 'Overhead silk',
         kinds: ['silk'],
-        kindHint: 'the overhead silk (a big white diffusion frame)',
+        kindHint: 'the overhead silk (the big white frame)',
         // Flat over their heads, high enough to stay out of the shot.
         pos: [0, 0.2, -0.06],
       },
@@ -412,22 +447,23 @@ export const BETA_LEVELS: LevelDef[] = [
     ],
     winScore: 85,
     quote: '"High noon in the desert. That sun is giving everyone raccoon eyes. Fix it. You can\'t move the sun."',
-    objective: 'Rig the overhead silk right above them to soften the sun, then a bounce card low in front to fill their faces.',
-    lesson: 'Harsh overhead sun: put a silk between the sun and the actors to soften it, then bounce some of it back into their faces. You shape daylight, you don\'t fight it.',
+    objective: 'Stand the big silk over their heads to soften the sun. Then a bounce card low in front to fill their faces.',
+    lesson: 'Harsh sun: a silk overhead softens it, a bounce card throws some back into their faces. You shape daylight, you don\'t fight it.',
     after: 'the PA just asked if you\'ve done a lot of westerns 🤠',
-    tip: 'Sun straight overhead = dark eye sockets. Silk goes flat over their heads (raise it till it hangs from the grid). Bounce card low in front, camera-right, to throw light back up into their faces. Tap Silk / Bounce on the iPad to rig them.',
+    tip: 'no lights needed out here. drag the silk over their heads, then the bounce card in front',
   },
   {
-    id: 'beta-3-car',
-    title: 'Car commercial (LED volume)',
+    id: 'beta-4-car',
+    title: 'Car commercial',
     set: 'led-volume',
-    // Dad driving, mom riding; Otis in the back with his head out the window. The car faces camera-left.
+    // Dad driving, mom riding; the dog in the back with his head out the window. The car faces camera-left.
     actors: [{ pos: [-0.035, 0, -0.035], rotY: -Math.PI / 2 }, { pos: [-0.035, 0, -0.088], rotY: -Math.PI / 2 }],
     directorsChair: false,
     aim: [0.01, 0.075, -0.05],
     camera: { x: 0.01, z: 0.24, fov: 48 },
     kit: [{ kind: 'fresnel' }, { kind: 'softbox' }, { kind: 'panel', dimmer: true }, { kind: 'par' }],
     houseStartsOn: true,
+    houseHint: 'ambient',
     roles: [
       {
         id: 'top',
@@ -448,10 +484,10 @@ export const BETA_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Car commercial. The family, the SUV, the dog. The LED wall does the scenery. You do the rest."',
     objective: 'The LED wall already lights them from behind. Add a big soft top light for the paint, and a key through the windows at half power.',
-    lesson: 'On an LED volume the wall is your background and your ambient light. You add a big soft source for the car\'s reflections and a gentle key for faces, dimmed so it matches the wall.',
+    lesson: 'On an LED volume the wall is your background and your ambient light. Add a big soft source for the paint and a gentle key for faces.',
     directorWin: '"Somebody get that dog an agent."',
     after: '',
-    tip: 'Kill the house lights. Softbox high over the car, hanging from the grid. LED panel front-left, low, aimed through the windows, dimmed to about half so it matches the wall.',
+    tip: 'softbox high over the car. LED panel low, front-left, at half',
   },
 ];
 

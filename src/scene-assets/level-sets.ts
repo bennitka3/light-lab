@@ -494,7 +494,8 @@ export function disposeSet(set: Object3D): void {
   const shared = new Set([woodMaterial, steelMaterial]);
   set.traverse((child) => {
     if (child instanceof Mesh) {
-      child.geometry.dispose();
+      // A loaded model's geometry belongs to the asset cache (fitCarModel).
+      if (!child.userData.sharedGeometry) child.geometry.dispose();
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       for (const material of materials) {
         if (shared.has(material as MeshStandardMaterial)) {
