@@ -18,6 +18,8 @@ export class SpeechBubble {
   private texture: CanvasTexture;
   private material: MeshBasicMaterial;
   private remaining = 0;
+  /** Seconds left of the current line being said (reading time), even when the bubble holds. */
+  private talking = 0;
   private queue: { speaker: string; line: string; hold: boolean }[] = [];
   /** Called as each line goes up (the system plays the speaker's voice). */
   onShow?: (speaker: string, line: string) => void;
@@ -65,7 +67,8 @@ export class SpeechBubble {
     this.line = line;
     this.onShow?.(speaker, line);
     const words = line.split(' ').length;
-    this.remaining = hold ? Infinity : Math.max(4, words / 3 + 1.5);
+    this.talking = Math.max(4, words / 3 + 1.5);
+    this.remaining = hold ? Infinity : this.talking;
     const ctx = this.canvas.getContext('2d');
     if (!ctx) {
       return;
@@ -105,13 +108,20 @@ export class SpeechBubble {
     this.material.opacity = 1;
   }
 
+  /** True while someone is still saying a line (Dee waits for it; ben, round 10). */
+  get speaking(): boolean {
+    return this.mesh.visible && (this.talking > 0 || this.queue.length > 0);
+  }
+
   hide(): void {
     this.queue = [];
     this.remaining = 0;
+    this.talking = 0;
     this.mesh.visible = false;
   }
 
   update(delta: number): void {
+    this.talking = Math.max(0, this.talking - delta);
     if (this.remaining <= 0) {
       return;
     }

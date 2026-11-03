@@ -152,7 +152,9 @@ export function createSoundstage(): Group {
   floor.castShadow = false;
   // An apron in front of the set where the light kit is parked, edged with gaffer tape.
   const apronMaterial = new MeshStandardMaterial({ color: '#4a463f', roughness: 0.9 });
-  const apron = box(STAGE_WIDTH, 0.01, 0.16, apronMaterial, 0, -0.005, STAGE_DEPTH / 2 + 0.08);
+  // It runs wider than the set and back past the crew, so the director's chair, the sponsor,
+  // the gaffer and craft services all stand on studio floor (ben, round 10: "maybe just widen the set").
+  const apron = box(STAGE_WIDTH + 0.34, 0.01, 0.23, apronMaterial, 0, -0.005, STAGE_DEPTH / 2 + 0.115);
   apron.castShadow = false;
   const tapeMaterial = new MeshStandardMaterial({ color: '#d9b310', roughness: 0.8 });
   const tape = box(STAGE_WIDTH - 0.02, 0.0004, 0.004, tapeMaterial, 0, 0.0002, STAGE_DEPTH / 2 + 0.01);
