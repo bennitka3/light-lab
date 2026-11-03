@@ -1,11 +1,13 @@
 import {
   BoxGeometry,
   CylinderGeometry,
+  DoubleSide,
   Group,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
+  PlaneGeometry,
   SphereGeometry,
   Vector3,
 } from '@iwsdk/core';
@@ -181,7 +183,11 @@ export function createSoundstage(): Group {
 /** Front edge of the kit area, where unused lights are parked, in stage-local z. */
 export const KIT_Z = 0.27;
 export const KIT_HEIGHT = 0.05;
-export type FixtureKind = 'softbox' | 'fresnel' | 'par' | 'panel' | 'strip';
+/**
+ * The kit. 'silk' and 'bounce' are not lights but light shapers (beta track):
+ * an overhead silk on a frame softens the sun, a white bounce card throws back fill.
+ */
+export type FixtureKind = 'softbox' | 'fresnel' | 'par' | 'panel' | 'strip' | 'silk' | 'bounce';
 /** A gel clipped over the light: CTO turns it warm orange, like tungsten or sunset. */
 export type Gel = 'none' | 'cto';
 const gelMaterial = new MeshStandardMaterial({
@@ -324,6 +330,53 @@ function createStripHead(head: Group): void {
 
 const panelFrameMaterial = new MeshStandardMaterial({ color: '#bfc3c9', roughness: 0.5, metalness: 0.5 });
 
+/** The silk's side length (stage meters): about a 6x6 frame at 1:14. */
+export const SILK_SIZE = 0.12;
+
+function createSilkHead(head: Group): void {
+  // An overhead silk: a square frame of speed-rail with white diffusion stretched across it,
+  // lying flat (the lighting system keeps it level instead of aiming it). "fixture-face" is the
+  // fabric: it only shows (and only blocks the sun) while the silk is rigged.
+  const half = SILK_SIZE / 2;
+  const rail = new BoxGeometry(SILK_SIZE, 0.002, 0.002);
+  for (const [x, z, turn] of [
+    [0, -half, 0],
+    [0, half, 0],
+    [-half, 0, Math.PI / 2],
+    [half, 0, Math.PI / 2],
+  ]) {
+    const bar = new Mesh(rail, standMaterial);
+    bar.position.set(x, 0, z);
+    bar.rotation.y = turn;
+    head.add(bar);
+  }
+  const fabric = new Mesh(
+    new PlaneGeometry(SILK_SIZE - 0.002, SILK_SIZE - 0.002),
+    new MeshStandardMaterial({
+      color: '#f4f1ea',
+      emissive: '#fff6e8',
+      emissiveIntensity: 0,
+      roughness: 1,
+      transparent: true,
+      opacity: 0.88,
+      side: DoubleSide,
+    }),
+  );
+  fabric.name = 'fixture-face';
+  fabric.rotation.x = -Math.PI / 2;
+  head.add(fabric);
+}
+
+function createBounceHead(head: Group): void {
+  // A 4x4 foam-core bounce card: white on the side facing the cast, black on the back.
+  const card = new Mesh(new BoxGeometry(0.05, 0.05, 0.0015), new MeshStandardMaterial({ color: '#141416', roughness: 0.9 }));
+  card.position.z = -0.001;
+  const face = new Mesh(new PlaneGeometry(0.049, 0.049), faceMaterial('#fff4e0'));
+  face.name = 'fixture-face';
+  face.position.z = 0.0001;
+  head.add(card, face);
+}
+
 /**
  * A light on a stand. The group's origin is the center of the light's head;
  * "fixture-head" turns to aim (it faces +Z, so lookAt aims it) and
@@ -342,6 +395,10 @@ export function createFixture(kind: FixtureKind, gel: Gel = 'none'): Group {
     createPanelHead(head);
   } else if (kind === 'strip') {
     createStripHead(head);
+  } else if (kind === 'silk') {
+    createSilkHead(head);
+  } else if (kind === 'bounce') {
+    createBounceHead(head);
   } else {
     createParHead(head);
   }
@@ -380,6 +437,7 @@ export function createFixture(kind: FixtureKind, gel: Gel = 'none'): Group {
  */
 function createSetDressing(): Object3D[] {
   const cStand = createCStand();
+  cStand.name = 'set-cstand';
   cStand.scale.setScalar(SCALE);
   cStand.position.set(-0.205, 0, -0.12);
   const standBag = createSandbag();

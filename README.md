@@ -28,6 +28,11 @@ the "next" button.
 `?scene=N` in the URL jumps straight to scene N (1-7), for testing or for
 picking up where you left off.
 
+`?track=beta` plays the experimental beta track instead (three scenes: 1B,
+dimmers only on a rigged three-point setup; a desert at noon with an overhead
+silk and a bounce card; a car commercial on an LED volume). It never changes
+the seven scenes. `?track=beta&scene=2` jumps within it.
+
 ## Controls
 
 - Headset: pinch and move a light (or squeeze on a controller); a quick pinch or
@@ -50,6 +55,10 @@ test API that the production build leaves out):
 - `node scripts/smoke-test.cjs` drives scene 1 with real mouse input.
 - `node scripts/playthrough.cjs` plays title to credits (about 4 minutes in
   software rendering).
+- `node scripts/beta-track.cjs` plays the beta track (1B by clicking only the
+  iPad's dimmers) and checks the main track is untouched.
+- `node scripts/follow-hints.cjs [url]` plays by following the tips; give it a
+  `?track=beta` URL for the beta scenes.
 
 `npm run build` writes the site to `dist/`. Pushes to `main` deploy it to
 GitHub Pages (`.github/workflows/pages.yml`).

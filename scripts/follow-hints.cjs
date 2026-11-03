@@ -4,7 +4,7 @@
 // how many steps it takes to win and how often the tip reverses itself.
 // Greg's round-7 playtest: in scene 3 the tip flipped left/right/back/forward and he
 // "didn't know where to go". A reversal storm here is that bug.
-// Usage: node scripts/follow-hints.cjs [url]
+// Usage: node scripts/follow-hints.cjs [url]   (add ?track=beta to the url for the beta track's scenes 2 and 3)
 const { chromium } = require('playwright');
 
 const STEP = 0.015; // meters on the 1:14 set, about one small drag
@@ -38,8 +38,10 @@ const TRIALS = Number(process.env.TRIALS || 6);
         [/closer to the screen/, 2, -1],
         [/away from the screen/, 2, 1],
       ];
-      for (let scene = 0; scene < 7; scene++) {
-        if (scene === 1) continue; // scene 2 starts set up; nothing to place
+      // Main track: scene 2 starts set up, so there's nothing to place. Beta track: 1B is dimmers only
+      // (scripts/beta-track.cjs plays that one), so only the desert and the car get placed.
+      const scenes = ll.beta() ? [1, 2] : [0, 2, 3, 4, 5, 6];
+      for (const scene of scenes) {
         const runs = [];
         for (let t = 0; t < TRIALS; t++) {
           ll.loadLevel(scene);
@@ -55,7 +57,7 @@ const TRIALS = Number(process.env.TRIALS || 6);
               p.y = Math.max(0.03, home.y + rand() * 0.05);
             } while (ll.inFrame());
           }
-          const win = { 0: 90 }[scene] ?? 85;
+          const win = ll.beta() ? 85 : ({ 0: 90 }[scene] ?? 85);
           let steps = 0;
           let reversals = 0;
           let last = null;

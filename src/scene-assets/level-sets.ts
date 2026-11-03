@@ -16,6 +16,7 @@ import {
 import type { SetId } from '../levels.js';
 import { STAGE_DEPTH, STAGE_HEIGHT, STAGE_WIDTH } from './soundstage.scene-asset.js';
 import { steelMaterial, woodMaterial } from './set-dressing.js';
+import { createBetaSet } from './beta-sets.js';
 
 /**
  * Set pieces for each scene, built procedurally in stage-local meters (1:14).
@@ -481,7 +482,8 @@ export function createLevelSet(id: SetId): Group {
       set = createRestaurantSet();
       break;
     default:
-      set = new Group();
+      // The beta track's sets (desert, LED volume) live in their own module.
+      set = createBetaSet(id) ?? new Group();
   }
   set.name = `set-${id}`;
   return set;

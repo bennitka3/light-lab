@@ -39,6 +39,8 @@ export type LightButton = {
   on: boolean;
   /** Bi-color lights show their color temperature with a dial (◀ warmer, ▶ cooler). */
   kelvin?: number;
+  /** Lights with a dimmer show their brightness, 10% to 100% (◀ dimmer, ▶ brighter). */
+  dimmer?: number;
 };
 
 /** What a press on the iPad landed on. */
@@ -48,6 +50,8 @@ export type IPadControl =
   | { type: 'light'; index: number }
   | { type: 'warmer'; index: number }
   | { type: 'cooler'; index: number }
+  | { type: 'dimmer'; index: number }
+  | { type: 'brighter'; index: number }
   | { type: 'size'; step: 1 | -1 }
   | { type: 'none' };
 
@@ -238,7 +242,10 @@ export class IPad {
     const same =
       highlight === this.highlight &&
       lights.length === this.lights.length &&
-      lights.every((l, i) => l.on === this.lights[i].on && l.kelvin === this.lights[i].kelvin && l.label === this.lights[i].label);
+      lights.every(
+        (l, i) =>
+          l.on === this.lights[i].on && l.kelvin === this.lights[i].kelvin && l.dimmer === this.lights[i].dimmer && l.label === this.lights[i].label,
+      );
     if (same) return;
     this.lights = lights.map((l) => ({ ...l }));
     this.highlight = highlight;
@@ -442,13 +449,13 @@ export class IPad {
   private drawLightRow(ctx: CanvasRenderingContext2D, m: (n: number) => number, pad: number): void {
     if (this.lights.length === 0) return;
     const gap = m(0.004);
-    const units = this.lights.reduce((sum, l) => sum + (l.kelvin !== undefined ? 2 : 1), 0);
+    const units = this.lights.reduce((sum, l) => sum + (l.kelvin !== undefined || l.dimmer !== undefined ? 2 : 1), 0);
     const unit = (W - 2 * pad - gap * (this.lights.length - 1)) / units;
     const top = m(ROW_TOP);
     const h = m(ROW_H);
     let x = pad;
     this.lights.forEach((light, index) => {
-      const dial = light.kelvin !== undefined;
+      const dial = light.kelvin !== undefined || light.dimmer !== undefined;
       const w = unit * (dial ? 2 : 1) + (dial ? gap : 0);
       roundRect(ctx, x, top, w, h, m(0.005));
       ctx.fillStyle = light.on ? '#2d2a14' : '#1c1c20';
@@ -471,7 +478,29 @@ export class IPad {
       }
       ctx.fillText(light.label, x + m(0.0105), top + h / 2 + m(size * 0.36));
       this.rects.push({ x, y: top, w: nameW, h, control: { type: 'light', index } });
-      if (dial) {
+      if (light.dimmer !== undefined && light.kelvin === undefined) {
+        // The dimmer: a bar filled to the current brightness, with its percentage.
+        const dx = x + unit + m(0.002);
+        const dw = w - unit - m(0.004);
+        const arrow = m(0.011);
+        const trackX = dx + arrow;
+        const trackW = dw - 2 * arrow;
+        const t = Math.min(1, Math.max(0, light.dimmer));
+        ctx.fillStyle = '#3f3f46';
+        ctx.fillRect(trackX, top + h * 0.62, trackW, h * 0.14);
+        ctx.fillStyle = light.on ? '#f5d90a' : '#a1a1aa';
+        ctx.fillRect(trackX, top + h * 0.62, trackW * t, h * 0.14);
+        ctx.fillStyle = '#fafafa';
+        ctx.font = `bold ${m(0.0072)}px system-ui, sans-serif`;
+        const pct = `${Math.round(t * 100)}%`;
+        ctx.fillText(pct, trackX + (trackW - ctx.measureText(pct).width) / 2, top + h * 0.46);
+        ctx.fillStyle = '#f5d90a';
+        ctx.font = `bold ${m(0.009)}px system-ui, sans-serif`;
+        ctx.fillText('◀', dx + m(0.001), top + h / 2 + m(0.003));
+        ctx.fillText('▶', dx + dw - arrow + m(0.002), top + h / 2 + m(0.003));
+        this.rects.push({ x: dx, y: top, w: dw / 2, h, control: { type: 'dimmer', index } });
+        this.rects.push({ x: dx + dw / 2, y: top, w: dw / 2, h, control: { type: 'brighter', index } });
+      } else if (dial) {
         // The dial: a warm-to-daylight gradient with a marker at the current setting.
         const dx = x + unit + m(0.002);
         const dw = w - unit - m(0.004);
