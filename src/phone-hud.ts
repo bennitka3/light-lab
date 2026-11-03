@@ -20,6 +20,14 @@ const BANNER_SECONDS = 5;
 const PX_W = 500;
 const PX_H = Math.round((PX_W * PHONE_HEIGHT) / PHONE_WIDTH);
 const TYPING_SECONDS = 1.1;
+/**
+ * After a text lands, the next one waits until there's been time to read it
+ * (ben, round 9: at the start of a scene Dee's texts pushed each other off the
+ * screen too fast). About a quarter second a word, between 1.2 and 5 seconds.
+ */
+const READ_SECONDS_PER_WORD = 0.25;
+const READ_MIN = 1.2;
+const READ_MAX = 5;
 /** Where the scroll buttons sit on the phone canvas (top of each pill, pixels). */
 const EARLIER_Y = 168;
 const NEWEST_Y = PX_H - 92;
@@ -39,6 +47,10 @@ export class PhoneHud {
   private banner?: Text;
   private bannerTime = 0;
   private sinceLast = Infinity;
+  /** Seconds left before the next queued text may start arriving. */
+  private readFor = 0;
+  /** How far (canvas pixels) the chat is still sliding up after a text landed; eases to 0. */
+  private slide = 0;
   /** The player tapped the phone to keep it up. */
   pinned = false;
   /** How many of the newest messages are scrolled off the bottom (0 = showing the latest). */
@@ -137,6 +149,12 @@ export class PhoneHud {
   update(delta: number): void {
     this.pop = Math.max(0, this.pop - delta * 2.5);
     this.sinceLast += delta;
+    this.readFor = Math.max(0, this.readFor - delta);
+    if (this.slide > 0) {
+      // The chat glides up instead of jumping when a text lands.
+      this.slide = this.slide < 0.5 ? 0 : this.slide * Math.exp(-delta * 9);
+      this.draw(this.typing > 0);
+    }
     if (this.banner) {
       this.bannerTime += delta;
       if (this.bannerTime > BANNER_SECONDS) {
@@ -144,7 +162,7 @@ export class PhoneHud {
         this.draw(false);
       }
     }
-    if (this.queue.length === 0) {
+    if (this.queue.length === 0 || (this.readFor > 0 && this.typing === 0)) {
       return;
     }
     if (this.queue[0].from !== 'dee') {
@@ -177,8 +195,19 @@ export class PhoneHud {
       this.pop = 1;
       this.onArrive?.();
       this.sinceLast = 0;
+      const words = next.text.split(/\s+/).length;
+      this.readFor = Math.min(READ_MAX, Math.max(READ_MIN, words * READ_SECONDS_PER_WORD));
+      this.slide = this.bubbleHeight(next.text) + 14;
       this.draw(false);
     }
+  }
+
+  /** A text's bubble height on the canvas, in pixels (as draw() lays it out). */
+  private bubbleHeight(text: string): number {
+    const ctx = this.canvas.getContext('2d');
+    if (!ctx) return 0;
+    ctx.font = '40px system-ui, sans-serif';
+    return wrap(ctx, text, PX_W - 70 - 44).length * 48 + 30;
   }
 
   private draw(typing: boolean): void {
@@ -224,7 +253,13 @@ export class PhoneHud {
     const bottom = scrolled ? NEWEST_Y - 14 : PX_H - 50;
     const top = EARLIER_Y + 56;
     ctx.font = '40px system-ui, sans-serif';
-    let y = bottom;
+    // While sliding, everything sits a little lower and the newest text rises in from
+    // the bottom edge; the chat area clips it.
+    let y = bottom + (scrolled ? 0 : this.slide);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(14, top - 8, PX_W - 28, PX_H - 40 - (top - 8));
+    ctx.clip();
     if (typing && !scrolled) {
       // The "..." typing bubble.
       roundRect(ctx, 34, y - 58, 110, 58, 29);
@@ -255,6 +290,7 @@ export class PhoneHud {
       lines.forEach((line, j) => ctx.fillText(line, 56, y - height + 52 + j * lineH));
       y -= height + 14;
     }
+    ctx.restore();
     // Scroll buttons: older texts above, and a way back to the newest.
     ctx.font = 'bold 26px system-ui, sans-serif';
     ctx.textAlign = 'center';

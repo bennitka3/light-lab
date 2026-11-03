@@ -334,7 +334,17 @@ export class IPad {
     // Labels above each shot: the scene callout with the target, the match score with yours.
     ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
     ctx.fillStyle = '#f5d90a';
-    ctx.fillText(`TARGET · ${page.eyebrow.toUpperCase()}`, pad, m(SHOT_TOP - 0.004));
+    // Long scene names shrink, then get cut, so they never run into "YOUR SHOT".
+    let label = `TARGET · ${page.eyebrow.toUpperCase()}`;
+    const maxW = m(SHOT_W) - m(0.004);
+    let size = 0.0085;
+    while (ctx.measureText(label).width > maxW && size > 0.0068) {
+      size -= 0.0003;
+      ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+    }
+    while (ctx.measureText(label).width > maxW && label.length > 4) label = `${label.slice(0, -2)}…`;
+    ctx.fillText(label, pad, m(SHOT_TOP - 0.004));
+    ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
     ctx.fillStyle = this.won ? '#4ade80' : '#ffffff';
     ctx.fillText(`YOUR SHOT · MATCH ${this.score}%`, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
     this.rects = [];

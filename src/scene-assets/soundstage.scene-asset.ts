@@ -164,15 +164,22 @@ export function createSoundstage(): Group {
   for (const wall of [back, left, right]) {
     wall.castShadow = false;
   }
+  // Named so outdoor scenes (beta track) can hide the studio: floor, walls, apron, grid.
+  floor.name = 'stage-floor';
+  apron.name = 'stage-apron';
+  back.name = left.name = right.name = 'stage-wall';
   stage.add(floor, back, left, right);
 
   // Overhead lighting grid, like the pipe grid in a real studio.
+  const grid = new Group();
+  grid.name = 'stage-grid';
   for (let i = -2; i <= 2; i++) {
-    stage.add(box(STAGE_WIDTH, 0.004, 0.004, gridMaterial, 0, STAGE_HEIGHT, i * 0.08));
+    grid.add(box(STAGE_WIDTH, 0.004, 0.004, gridMaterial, 0, STAGE_HEIGHT, i * 0.08));
   }
   for (let i = -1; i <= 1; i++) {
-    stage.add(box(0.004, 0.004, STAGE_DEPTH, gridMaterial, i * 0.16, STAGE_HEIGHT, 0));
+    grid.add(box(0.004, 0.004, STAGE_DEPTH, gridMaterial, i * 0.16, STAGE_HEIGHT, 0));
   }
+  stage.add(grid);
 
   stage.add(createSubject(), createCineCamera());
   stage.add(...createSetDressing());
@@ -330,8 +337,8 @@ function createStripHead(head: Group): void {
 
 const panelFrameMaterial = new MeshStandardMaterial({ color: '#bfc3c9', roughness: 0.5, metalness: 0.5 });
 
-/** The silk's side length (stage meters): about a 6x6 frame at 1:14. */
-export const SILK_SIZE = 0.12;
+/** The silk's side length (stage meters): a 12x12 butterfly frame at 1:14, big enough for two people. */
+export const SILK_SIZE = 0.24;
 
 function createSilkHead(head: Group): void {
   // An overhead silk: a square frame of speed-rail with white diffusion stretched across it,
@@ -365,6 +372,14 @@ function createSilkHead(head: Group): void {
   fabric.name = 'fixture-face';
   fabric.rotation.x = -Math.PI / 2;
   head.add(fabric);
+  // A butterfly frame stands on two stands at its sides, out past the actors (the
+  // lighting system stretches these to the ground and hides the usual center stand).
+  for (const side of [-1, 1]) {
+    const leg = new Mesh(new CylinderGeometry(0.0011, 0.0013, 1, 8), standMaterial);
+    leg.name = 'silk-leg';
+    leg.position.x = side * half;
+    head.add(leg);
+  }
 }
 
 function createBounceHead(head: Group): void {

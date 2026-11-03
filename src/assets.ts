@@ -42,4 +42,7 @@ export default defineAssets({
   // The camera operator (Rocketbox Male_Adult_18, MIT, gray hoodie so he reads on a dark set).
   // Not a scene node: the game puts him on the "camera-rig" so he follows the camera (camera-operator.ts).
   'crew-operator': { url: publicAssetUrl('models/crew-operator.glb'), type: AssetType.GLTF, priority: 'background' },
+  // The SUV for the beta car commercial: Kenney Car Kit "suv" (CC0, kenney.nl), restyled in
+  // beta-sets.ts fitCarModel. Until it loads, a procedural stand-in sits in its place.
+  'car-suv': { url: publicAssetUrl('models/car-suv.glb'), type: AssetType.GLTF, priority: 'background' },
 });

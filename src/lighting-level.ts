@@ -41,6 +41,7 @@ import { LightingStage, StageLight } from './lighting-components.js';
 import { DEE_WINS, DIRECTOR_WINS, IS_BETA, type KitItem, type LevelDef, type Role, TRACK_LEVELS as LEVELS } from './levels.js';
 import { PHONE_HEIGHT, PHONE_WIDTH, PhoneHud } from './phone-hud.js';
 import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-sets.js';
+import { fitCarModel } from './scene-assets/beta-sets.js';
 import {
   createFixture,
   type FixtureKind,
@@ -156,6 +157,22 @@ const LIGHT_QUALITY: Record<
   bounce: { color: '#fff1dc', intensity: 0.05, angleDeg: 65, penumbra: 1, shadowRadius: 10 },
 };
 const CTO_TINT = new Color('#ff9a45');
+/** The browser's background: a dark studio, or a hazy sky for outdoor scenes. */
+const STUDIO_BACKDROP = '#141416';
+const OUTDOOR_SKY = '#cfe2f1';
+/** Light shapers (beta track): no switch; they work whenever they stand on the set, past the tape. */
+const SHAPERS = new Set<FixtureKind>(['silk', 'bounce']);
+const TAPE_Z = STAGE_DEPTH / 2 + 0.01;
+/** How far each kind's head reaches from its center (stage meters), for "is it in the shot". */
+const HEAD_REACH: Record<FixtureKind, number> = {
+  softbox: 0.018,
+  panel: 0.015,
+  strip: 0.021,
+  fresnel: 0.009,
+  par: 0.008,
+  silk: 0, // checked by its frame and stands instead
+  bounce: 0.025,
+};
 
 const KIND_NAMES: Record<FixtureKind, string> = {
   softbox: 'softbox',
@@ -368,6 +385,8 @@ export class LightingLevelSystem extends createSystem({
   private hovered?: Fixture;
   /** The iPad's light row: HOUSE, each light in the kit, then the lamp when there is one. */
   private lightButtons: LightButton[] = [];
+  /** What each switch on the iPad's row works: the house lights, a light from the kit, or the lamp. */
+  private buttonTargets: (Fixture | 'house' | 'lamp')[] = [];
   /** How big the player wants the iPad (the - and + buttons), remembered between visits. */
   private ipadZoom = loadZoom();
   private canEnterXR = false;
@@ -386,6 +405,8 @@ export class LightingLevelSystem extends createSystem({
   private phoneWheel = 0;
   /** The scene's own cast member hasn't loaded yet (the stand-in actor is sitting in). */
   private castPending = false;
+  /** The car commercial's real SUV model hasn't replaced the stand-in yet. */
+  private carPending = false;
   private retakeTarget = false;
   /** The camera operator's model hasn't loaded yet (he joins the camera rig once it has). */
   private operatorPending = true;
@@ -394,6 +415,8 @@ export class LightingLevelSystem extends createSystem({
   private houseEverOff = false;
   private sceneTime = 0;
   private houseTexts = 0;
+  /** Seconds the house lights have been on while lights were on the set, this scene. */
+  private houseWork = 0;
 
   // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
   private inFrameTime = 0;
@@ -406,7 +429,10 @@ export class LightingLevelSystem extends createSystem({
   private sinceNudge = 0;
 
   private errorShown = false;
-  private backdrop = new Color('#141416');
+  /** Shader warm-up after a scene loads: how many lights to have on in the next pass, or -1 when done. */
+  private warmup = -1;
+  private warmupTarget = new WebGLRenderTarget(16, 9);
+  private backdrop = new Color(STUDIO_BACKDROP);
   private chime = new Audio(`${import.meta.env.BASE_URL}audio/chime.mp3`);
 
   // Desktop mouse: dragging a light, or orbiting the view around the set.
@@ -435,6 +461,8 @@ export class LightingLevelSystem extends createSystem({
   private tipMove = { role: '', axis: -1, sign: 0 };
   /** "Height looks good." once the player has finished one direction and the tip moves on to another. */
   private tipDone = '';
+  /** Directions (bitmask of axes) the tip has finished for its current light. */
+  private tipFinished = 0;
   private lensWorld = new Vector3();
   private headWorld = new Vector3();
   private hudTarget = new Vector3();
@@ -527,6 +555,13 @@ export class LightingLevelSystem extends createSystem({
       this.updateSwitches();
       for (const fixture of this.fixtures) {
         this.updateGrab(fixture, delta);
+        if (SHAPERS.has(fixture.item.kind)) {
+          const placed = fixture.local.z < TAPE_Z;
+          if (placed !== fixture.on) {
+            fixture.on = placed;
+            this.resetHold();
+          }
+        }
         this.updateFixture(fixture);
       }
       this.aimShotCamera();
@@ -542,7 +577,9 @@ export class LightingLevelSystem extends createSystem({
       if (!this.immersive || this.framesSinceLoad % 3 === 0) {
         this.renderShot(this.shotTarget, true);
       }
+      if (this.warmup >= 0 && this.framesSinceLoad > 2) this.warmupStep();
       if (this.castPending && this.framesSinceLoad % 20 === 0) this.seatCastMember();
+      if (this.carPending && this.framesSinceLoad % 20 === 5) this.swapInCar();
       if (this.operatorPending && this.framesSinceLoad % 20 === 10) this.placeOperator();
       this.creature.update(delta);
       this.updateScore(delta);
@@ -654,6 +691,9 @@ export class LightingLevelSystem extends createSystem({
           dimmer: (i: number) => this.fixtures[i].dimmer,
           turnDimmer: (i: number, step: 1 | -1) => this.turnDimmer(this.fixtures[i], step),
           beta: () => IS_BETA,
+          // How many shader programs exist (a rise after a press means it compiled shaders).
+          programs: () => this.world.renderer.info.programs?.length ?? -1,
+          warmupDone: () => this.warmup < 0,
           // The target ('target') or live ('live') shot as a PNG data URL, for tests to look at closely.
           shotImage: (which: 'target' | 'live') => {
             const rt = which === 'target' ? this.targetShot : this.shotTarget;
@@ -747,6 +787,7 @@ export class LightingLevelSystem extends createSystem({
     this.houseOn = this.level.houseStartsOn ?? true;
     this.houseEverOff = !this.houseOn;
     this.sceneTime = 0;
+    this.houseWork = 0;
     this.holdTime = 0;
     this.inFrameTime = 0;
     this.inFrameTexted.clear();
@@ -759,9 +800,20 @@ export class LightingLevelSystem extends createSystem({
     // LED wall (beta track), so it goes away there.
     const cStand = this.stage.getObjectByName('set-cstand');
     if (cStand) cStand.visible = level.set !== 'desert' && level.set !== 'led-volume';
+    // Outdoors (beta track) the studio goes away: no walls, grid, house lights or floor;
+    // the set brings its own ground, which fades out at the edges (ben, round 9).
+    const outdoor = Boolean(level.outdoor);
+    for (const child of this.stage.children) {
+      if (child.name === 'stage-wall' || child.name === 'stage-floor' || child.name === 'stage-apron' || child.name === 'stage-grid' || child.name === 'house-fixtures') {
+        child.visible = !outdoor;
+      }
+    }
+    this.backdrop.set(outdoor ? OUTDOOR_SKY : STUDIO_BACKDROP);
     this.set = createLevelSet(level.set);
     this.stage.add(this.set);
     this.greenScreen = (this.set.getObjectByName('green-screen') as Mesh | undefined) ?? undefined;
+    this.carPending = Boolean(this.set.getObjectByName('car'));
+    this.swapInCar();
 
     // Cast.
     if (this.directorsChair) {
@@ -864,6 +916,45 @@ export class LightingLevelSystem extends createSystem({
     }
 
     this.showBriefCard();
+    this.warmup = 0;
+  }
+
+  /**
+   * Switching a light on or off changes how many lights the scene has, and
+   * three.js then rebuilds every material's shader: a visible stall on the
+   * first press (ben, round 9: "the light on buttons are slow"; measured about
+   * 1.3-1.8 s per first toggle in software rendering). So right after a scene
+   * loads, one count per frame, prepare the shaders for 0..all the scene's
+   * lights being on. Later presses reuse them.
+   */
+  private warmupStep(): void {
+    const count = this.warmup;
+    if (count > this.fixtures.length) {
+      this.warmup = -1;
+      return;
+    }
+    this.fixtures.forEach((fixture, i) => {
+      fixture.spot.visible = i < count;
+    });
+    // A tiny render (not just compile) also links the shaders and allocates each
+    // light's shadow map now, rather than on the first press.
+    const renderer = this.world.renderer;
+    const previous = renderer.getRenderTarget();
+    const xrEnabled = renderer.xr.enabled;
+    renderer.xr.enabled = false;
+    try {
+      // Shaders differ between drawing to the screen (tone mapped) and to the
+      // iPad's shot textures, so prepare both.
+      renderer.setRenderTarget(this.warmupTarget);
+      renderer.render(this.world.scene, this.shotCamera);
+      renderer.setRenderTarget(null);
+      renderer.compile(this.world.scene, this.world.camera);
+    } finally {
+      renderer.setRenderTarget(previous);
+      renderer.xr.enabled = xrEnabled;
+      for (const fixture of this.fixtures) fixture.spot.visible = fixture.on;
+    }
+    this.warmup = count + 1;
   }
 
   /** Puts the scene's own cast member (LevelDef.actorAsset) in the first seat once the model has loaded. */
@@ -883,6 +974,22 @@ export class LightingLevelSystem extends createSystem({
     // Retake the director's target shot with him in it on the next frame.
     this.retakeTarget = true;
     devLog(`cast ${this.level.actorAsset} seated`);
+  }
+
+  /** Swaps the procedural stand-in car for the real SUV model once it has loaded. */
+  private swapInCar(): void {
+    const stand = this.carPending ? this.set?.getObjectByName('car') : undefined;
+    const model = stand ? this.loadedModel('car-suv') : undefined;
+    if (!stand || !model) return;
+    this.carPending = false;
+    const car = fitCarModel(model);
+    car.position.copy(stand.position);
+    car.rotation.copy(stand.rotation);
+    stand.parent!.add(car);
+    stand.removeFromParent();
+    disposeSet(stand);
+    this.retakeTarget = true;
+    devLog('car model in');
   }
 
   /** Stands the camera operator behind the camera (on its rig) once his model has loaded. */
@@ -1151,7 +1258,7 @@ export class LightingLevelSystem extends createSystem({
   /** The callout over the target shot: "Scene 3 of 7", or on the beta track "Beta 2 of 3 · Desert at noon". */
   private sceneLabel(): string {
     return IS_BETA
-      ? `Beta ${this.levelIndex + 1} of ${LEVELS.length} · ${this.level.title}`
+      ? `Beta ${this.levelIndex + 1}/${LEVELS.length} · ${this.level.title}`
       : `Scene ${this.levelIndex + 1} of ${LEVELS.length}`;
   }
 
@@ -1281,6 +1388,8 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private toggle(fixture: Fixture): void {
+    // A silk or bounce card has no switch.
+    if (SHAPERS.has(fixture.item.kind)) return;
     devLog(`light ${fixture.item.kind} switched ${fixture.on ? 'off' : 'on'}`);
     fixture.on = !fixture.on;
     this.resetHold();
@@ -1324,9 +1433,18 @@ export class LightingLevelSystem extends createSystem({
   private buildLightButtons(): void {
     const screens = this.level.kit.filter((item) => item.aim === 'screen').length;
     let screenN = 0;
-    this.lightButtons = [{ label: 'HOUSE', on: this.houseOn }];
+    this.lightButtons = [];
+    this.buttonTargets = [];
+    // Outdoors there are no house lights to switch.
+    if (!this.level.outdoor) {
+      this.lightButtons.push({ label: 'HOUSE', on: this.houseOn });
+      this.buttonTargets.push('house');
+    }
     for (const fixture of this.fixtures) {
       const item = fixture.item;
+      // Silks and bounce cards have no switch: they work once they're on the set.
+      if (SHAPERS.has(item.kind)) continue;
+      this.buttonTargets.push(fixture);
       let label = KIND_LABELS[item.kind];
       if (item.aim === 'screen') {
         screenN += 1;
@@ -1341,6 +1459,7 @@ export class LightingLevelSystem extends createSystem({
     }
     if (this.practical) {
       this.lightButtons.push({ label: 'Lamp', on: this.practical.on });
+      this.buttonTargets.push('lamp');
     }
   }
 
@@ -1348,18 +1467,20 @@ export class LightingLevelSystem extends createSystem({
   private updateLightButtons(): void {
     const buttons = this.lightButtons;
     if (buttons.length === 0) return;
-    buttons[0].on = this.houseOn;
-    this.fixtures.forEach((fixture, i) => {
-      const button = buttons[i + 1];
+    this.buttonTargets.forEach((target, i) => {
+      const button = buttons[i];
       if (!button) return;
-      button.on = fixture.on;
-      if (button.kelvin !== undefined) button.kelvin = fixture.kelvin;
-      if (button.dimmer !== undefined) button.dimmer = fixture.dimmer;
+      if (target === 'house') {
+        button.on = this.houseOn;
+      } else if (target === 'lamp') {
+        button.on = this.practical?.on ?? false;
+      } else {
+        button.on = target.on;
+        if (button.kelvin !== undefined) button.kelvin = target.kelvin;
+        if (button.dimmer !== undefined) button.dimmer = target.dimmer;
+      }
     });
-    if (this.practical && buttons.length > this.fixtures.length + 1) {
-      buttons[this.fixtures.length + 1].on = this.practical.on;
-    }
-    const highlight = this.hovered ? this.fixtures.indexOf(this.hovered) + 1 : -1;
+    const highlight = this.hovered ? this.buttonTargets.indexOf(this.hovered) : -1;
     this.ipad.setLights(this.ipad.isFull ? [] : buttons, highlight);
   }
 
@@ -1421,20 +1542,20 @@ export class LightingLevelSystem extends createSystem({
     } else if (control.type === 'size') {
       this.zoomIpad(control.step);
     } else if (control.type === 'light') {
-      const n = control.index;
-      if (n === 0) {
+      const target = this.buttonTargets[control.index];
+      if (target === 'house') {
         this.toggleHouse();
-      } else if (n <= this.fixtures.length) {
-        this.toggle(this.fixtures[n - 1]);
-      } else if (this.practical) {
-        this.practical.switch.toggle();
+      } else if (target === 'lamp') {
+        this.practical?.switch.toggle();
+      } else if (target) {
+        this.toggle(target);
       }
     } else if (control.type === 'warmer' || control.type === 'cooler') {
-      const fixture = this.fixtures[control.index - 1];
-      if (fixture) this.turnDial(fixture, control.type === 'warmer' ? -1 : 1);
+      const fixture = this.buttonTargets[control.index];
+      if (fixture && typeof fixture !== 'string') this.turnDial(fixture, control.type === 'warmer' ? -1 : 1);
     } else if (control.type === 'dimmer' || control.type === 'brighter') {
-      const fixture = this.fixtures[control.index - 1];
-      if (fixture) this.turnDimmer(fixture, control.type === 'dimmer' ? -1 : 1);
+      const fixture = this.buttonTargets[control.index];
+      if (fixture && typeof fixture !== 'string') this.turnDimmer(fixture, control.type === 'dimmer' ? -1 : 1);
     }
   }
 
@@ -1509,7 +1630,18 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private updateFixture(fixture: Fixture): void {
-    if (fixture.local.y >= HANG_HEIGHT) {
+    if (fixture.item.kind === 'silk') {
+      // A butterfly frame: two stands at its sides, down to the ground; no center stand.
+      fixture.pole.visible = false;
+      fixture.base.visible = false;
+      const h = Math.max(fixture.local.y, 0.01);
+      fixture.head.traverse((child) => {
+        if (child.name === 'silk-leg') {
+          child.scale.y = h;
+          child.position.y = -h / 2;
+        }
+      });
+    } else if (this.hangs(fixture.local.y)) {
       // High up, the light hangs from the grid: the pipe runs up to the ceiling.
       const poleLength = Math.max(STAGE_HEIGHT - fixture.local.y - 0.012, 0.001);
       fixture.pole.scale.y = poleLength;
@@ -1524,6 +1656,7 @@ export class LightingLevelSystem extends createSystem({
       fixture.pole.position.y = -0.012 - poleLength / 2;
       fixture.base.position.y = -height;
       fixture.base.visible = true;
+      fixture.pole.visible = true;
       if (fixture.yoke) fixture.yoke.rotation.z = 0;
     }
 
@@ -1561,6 +1694,11 @@ export class LightingLevelSystem extends createSystem({
       }
     }
     fixture.led.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
+  }
+
+  /** Does a light this high hang from the grid? Outdoors there is no grid: everything stands. */
+  private hangs(y: number): boolean {
+    return y >= HANG_HEIGHT && !this.level.outdoor;
   }
 
   /** A stage-local light position as an orbit around the aim point: azimuth 0 is the camera side, negative is camera-left. */
@@ -1623,10 +1761,15 @@ export class LightingLevelSystem extends createSystem({
         fixture.handle.visible = false;
       }
     }
+    // In the headset the scene has no background (the room shows through), but an
+    // outdoor shot on the monitor still needs its sky.
+    const background = this.world.scene.background;
+    if (!background && this.level.outdoor) this.world.scene.background = this.backdrop;
     try {
       renderer.setRenderTarget(into);
       renderer.render(this.world.scene, this.shotCamera);
     } finally {
+      this.world.scene.background = background;
       renderer.setRenderTarget(previousTarget);
       for (const fixture of this.fixtures) {
         fixture.object.visible = true;
@@ -1692,9 +1835,14 @@ export class LightingLevelSystem extends createSystem({
   }
 
   private roleFit(role: Role, local: Vector3): number {
+    return Math.exp(this.roleLogFit(role, local));
+  }
+
+  /** log of roleFit: never flat, so tips still know which way to go when the light is far off. */
+  private roleLogFit(role: Role, local: Vector3): number {
     if (role.pos) {
       const d = local.distanceTo(this.v2.set(...role.pos));
-      return Math.exp(-((Math.max(0, d - 0.01) / POSITION_TOLERANCE) ** 2));
+      return -((Math.max(0, d - 0.01) / POSITION_TOLERANCE) ** 2);
     }
     const pose = this.poseOf(local);
     const { az, el, d } = role.orbit!;
@@ -1702,7 +1850,7 @@ export class LightingLevelSystem extends createSystem({
     dAz = Math.min(dAz, 360 - dAz);
     const dEl = pose.elevation - el;
     const dDist = Math.log(pose.distance / d);
-    return Math.exp(-((dAz / 25) ** 2) - (dEl / 20) ** 2 - (dDist / 0.35) ** 2);
+    return -((dAz / 25) ** 2) - (dEl / 20) ** 2 - (dDist / 0.35) ** 2;
   }
 
   /** Matches switched-on lights to the scene's roles and scores the setup, with one hint. */
@@ -1742,12 +1890,11 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn) {
       score = Math.round(score * HOUSE_FACTOR);
     }
-    if (this.houseOn && !this.houseEverOff) {
-      return {
-        score,
-        hint: this.houseTexts < 2 ? 'The house lights flatten everything. Turn them off!' : "Don't forget to cut the house lights.",
-      };
-    }
+    // The house lights no longer come first (ben, round 9: they help you see the
+    // gear while you place lights; nagging about them before you've moved anything
+    // is annoying). The tips place the lights; the house lights come up once the
+    // lights look right, and Dee mentions them only after they've stayed on a while
+    // with lights placed (updateNudges).
     if (level.practical && !this.practical?.on) {
       return { score: Math.min(score, 60), hint: 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
@@ -1771,12 +1918,21 @@ export class LightingLevelSystem extends createSystem({
           hint: `Wrong light for the ${role.label.toLowerCase()}: it needs ${role.kindHint}.`,
         };
       }
+      if (SHAPERS.has(role.kinds[0])) {
+        // Silks and bounce cards have no switch: they just need to be on the set.
+        return { score, hint: `Still missing: the ${role.label.toLowerCase()}. Drag ${role.kindHint} onto the set.` };
+      }
       const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
       return { score, hint: on.length === 0 ? "Tap a light's button on the iPad to switch it on." : `${label} Use ${role.kindHint}.` };
     }
     if (extras.length > 0) {
       score = Math.min(score, 70);
-      return { score, hint: `Too many lights: switch off the ${itemName(extras[0].item)}.` };
+      return {
+        score,
+        hint: SHAPERS.has(extras[0].item.kind)
+          ? `The ${itemName(extras[0].item)} isn't needed here. Drag it back behind the tape.`
+          : `Too many lights: switch off the ${itemName(extras[0].item)}.`,
+      };
     }
     // Dimmers (beta track): once the lights are in place, say which one is too bright or too dark.
     const placed = assigned.reduce((a, b) => (b.place < a.place ? b : a));
@@ -1786,9 +1942,16 @@ export class LightingLevelSystem extends createSystem({
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
     if (this.houseOn && worst.fit > 0.85) {
-      return { score, hint: 'Looks right. Cut the house lights when you want to roll.' };
+      return {
+        score,
+        hint: level.houseHint === 'ambient' ? "Looks right, but there's too much ambient light." : 'Looks right. Cut the house lights when you want to roll.',
+      };
     }
-    return { score, hint: this.placeHint(worst.role, worst.fixture!), fixture: worst.fixture };
+    // Stay with the light the tip is already about until it is in place, so the tip
+    // doesn't jump between lights as their scores trade places.
+    const current = assigned.find((a) => a.fixture && a.role.id === this.tipMove.role && a.place < 0.95);
+    const focus = current ?? assigned.reduce((a, b) => (b.place < a.place ? b : a));
+    return { score, hint: this.placeHint(focus.role, focus.fixture!), fixture: focus.fixture };
   }
 
   /** How close a light's dimmer is to the role's brightness (1 when it has no dimmer or the role doesn't care). */
@@ -1855,7 +2018,7 @@ export class LightingLevelSystem extends createSystem({
    */
   private framedFixture(): Fixture | undefined {
     for (const fixture of this.fixtures) {
-      if (this.inFrameAt(fixture.local)) {
+      if (this.inFrameAt(fixture.local, fixture.item.kind)) {
         return fixture;
       }
     }
@@ -1863,19 +2026,44 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /** Would a light standing (or hanging) at this stage-local spot show in the cine camera's frame? */
-  private inFrameAt(local: Vector3): boolean {
+  private inFrameAt(local: Vector3, kind?: FixtureKind): boolean {
     const { x, y, z } = local;
-    const hung = y >= HANG_HEIGHT;
-    const end = hung ? STAGE_HEIGHT : 0;
-    for (let i = 0; i <= 8; i++) {
-      this.v4.set(x, y + ((end - y) * i) / 8, z);
-      this.stage.localToWorld(this.v4);
-      this.v4.project(this.shotCamera);
-      if (this.v4.z > -1 && this.v4.z < 1 && Math.abs(this.v4.x) < 0.98 && Math.abs(this.v4.y) < 0.98) {
-        return true;
+    if (kind === 'silk') {
+      // The frame's four corners and its two side stands down to the ground.
+      const half = SILK_SIZE / 2;
+      for (const [dx, dz] of [
+        [-half, -half],
+        [half, -half],
+        [-half, half],
+        [half, half],
+      ]) {
+        if (this.seen(x + dx, y, z + dz)) return true;
       }
+      for (const side of [-1, 1]) {
+        for (let i = 0; i <= 8; i++) {
+          if (this.seen(x + side * half, (y * i) / 8, z)) return true;
+        }
+      }
+      return false;
+    }
+    // The head's edges (a light just peeking into the frame still shows on the monitor).
+    const r = kind ? HEAD_REACH[kind] : 0;
+    if (r > 0) {
+      if (this.seen(x - r, y, z) || this.seen(x + r, y, z) || this.seen(x, y - r, z) || this.seen(x, y + r, z)) return true;
+    }
+    const end = this.hangs(y) ? STAGE_HEIGHT : 0;
+    for (let i = 0; i <= 8; i++) {
+      if (this.seen(x, y + ((end - y) * i) / 8, z)) return true;
     }
     return false;
+  }
+
+  /** Is this stage-local point inside the cine camera's frame? */
+  private seen(x: number, y: number, z: number): boolean {
+    this.v4.set(x, y, z);
+    this.stage.localToWorld(this.v4);
+    this.v4.project(this.shotCamera);
+    return this.v4.z > -1 && this.v4.z < 1 && Math.abs(this.v4.x) < 0.98 && Math.abs(this.v4.y) < 0.98;
   }
 
   /**
@@ -1903,53 +2091,49 @@ export class LightingLevelSystem extends createSystem({
     if (role.orbit && target.z < this.aimLocal.z - 0.02 && here.z > this.aimLocal.z) {
       return `The ${lower} belongs behind the cast. Move it round the back.`;
     }
+    // One direction at a time (ben, round 9: the tip went "right, left, back..."
+    // and he got nowhere). Stay on the direction the tip already gave while it
+    // still helps at all. When it stops helping, that direction is done: say so,
+    // and work the other directions before coming back to it for a correction.
+    const kind = fixture.item.kind;
+    const kept = this.tipMove.role === role.id && this.tipMove.axis >= 0 ? this.tipMove : undefined;
+    if (this.tipMove.role !== role.id) this.tipFinished = 0;
     let bestAxis = -1;
     let bestSign = 0;
-    let bestGain = 0;
-    let keepGain = 0;
-    const kept = this.tipMove.role === role.id ? this.tipMove : undefined;
-    for (let axis = 0; axis < 3; axis++) {
-      for (let sign = -1; sign <= 1; sign += 2) {
-        const gain = this.stepGain(role, here, axis, sign, TIP_STEP, fit);
-        if (kept && kept.axis === axis && kept.sign === sign) keepGain = gain;
-        if (gain > bestGain) {
-          bestGain = gain;
-          bestAxis = axis;
-          bestSign = sign;
-        }
-      }
-    }
-    // Keep going the way the tip already said while that still helps about as much.
-    if (kept && kept.axis >= 0 && keepGain > 0.002 && keepGain >= bestGain * 0.5) {
-      bestAxis = kept.axis;
-      bestSign = kept.sign;
-      bestGain = keepGain;
-    }
     let nudge = false;
-    if (bestGain <= 0.002) {
-      // A full step overshoots every way: try half steps.
-      for (let axis = 0; axis < 3; axis++) {
-        for (let sign = -1; sign <= 1; sign += 2) {
-          const gain = this.stepGain(role, here, axis, sign, TIP_STEP / 2, fit);
-          if (gain > bestGain) {
-            bestGain = gain;
-            bestAxis = axis;
-            bestSign = sign;
-          }
-        }
+    if (kept) {
+      if (this.stepGain(role, here, kept.axis, kept.sign, TIP_STEP, fit, kind) > 0.002) {
+        bestAxis = kept.axis;
+        bestSign = kept.sign;
+        nudge = this.stepGain(role, here, kept.axis, kept.sign, TIP_STEP / 2, fit, kind) > this.stepGain(role, here, kept.axis, kept.sign, TIP_STEP, fit, kind);
+      } else if (this.stepGain(role, here, kept.axis, kept.sign, TIP_STEP / 2, fit, kind) > 0.002) {
+        bestAxis = kept.axis;
+        bestSign = kept.sign;
+        nudge = true;
+      } else {
+        this.tipFinished |= 1 << kept.axis;
       }
-      nudge = true;
-    } else if (this.stepGain(role, here, bestAxis, bestSign, TIP_STEP / 2, fit) > bestGain) {
-      nudge = true; // half a step does better than a whole one
+    }
+    if (bestAxis < 0) {
+      // Pick the most helpful direction among those not finished yet; if they are all
+      // finished (or none helps), any direction may need a correction.
+      let pick = this.bestMove(role, here, fit, kind, this.tipFinished);
+      if (pick.axis < 0) {
+        this.tipFinished = 0;
+        pick = this.bestMove(role, here, fit, kind, 0);
+      }
+      bestAxis = pick.axis;
+      bestSign = pick.sign;
+      nudge = pick.nudge;
     }
     if (bestAxis < 0) {
       this.tipMove.axis = -1;
       return 'Almost there. Hold it...';
     }
     // Say when the player has finished one direction and the tip moves to another.
-    if (kept && kept.axis >= 0 && kept.axis !== bestAxis) {
+    if (kept && kept.axis !== bestAxis) {
       this.tipDone = ['Left-right looks good. ', 'Height looks good. ', 'Distance looks good. '][kept.axis];
-    } else if (!kept || kept.axis < 0) {
+    } else if (!kept) {
       this.tipDone = '';
     }
     this.tipMove.role = role.id;
@@ -1959,7 +2143,7 @@ export class LightingLevelSystem extends createSystem({
     const bit = nudge ? ' a little' : '';
     let move: string;
     if (bestAxis === 1) {
-      if (bestSign > 0 && target.y >= HANG_HEIGHT && here.y < HANG_HEIGHT) {
+      if (bestSign > 0 && this.hangs(target.y) && !this.hangs(here.y)) {
         move = `Raise the ${lower} until it hangs from the grid.`;
       } else {
         move = `${bestSign > 0 ? 'Raise' : 'Lower'} the ${lower}${bit}.`;
@@ -1969,19 +2153,49 @@ export class LightingLevelSystem extends createSystem({
     } else if (role.pos && role.aim === 'screen') {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
     } else {
-      move = bestSign < 0 ? `${verb} the ${lower}${bit} back, away from the camera.` : `${verb} the ${lower}${bit} forward, toward the camera.`;
+      // Forward and back as the player sees the set from behind the camera (ben, round 9:
+      // "away from the camera" confused him when the light already stood beside it).
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} back, deeper into the set.` : `${verb} the ${lower}${bit} forward, toward you.`;
     }
     return this.tipDone + move;
   }
 
+  /** The direction (not in `skip`, a bitmask of axes) whose step helps most: a full step, else a half step ("nudge"). */
+  private bestMove(role: Role, here: Vector3, fit: number, kind: FixtureKind, skip: number): { axis: number; sign: number; nudge: boolean } {
+    for (const step of [TIP_STEP, TIP_STEP / 2]) {
+      let axis = -1;
+      let sign = 0;
+      let best = 0.002;
+      for (let a = 0; a < 3; a++) {
+        if (skip & (1 << a)) continue;
+        for (let sg = -1; sg <= 1; sg += 2) {
+          const gain = this.stepGain(role, here, a, sg, step, fit, kind);
+          if (gain > best) {
+            best = gain;
+            axis = a;
+            sign = sg;
+          }
+        }
+      }
+      if (axis >= 0) {
+        const nudge = step < TIP_STEP || this.stepGain(role, here, axis, sign, TIP_STEP / 2, fit, kind) > best;
+        return { axis, sign, nudge };
+      }
+    }
+    return { axis: -1, sign: 0, nudge: false };
+  }
+
   /** How much the role's fit improves if the light moves `step` along one axis (minus if it gets worse or lands in frame). */
-  private stepGain(role: Role, here: Vector3, axis: number, sign: number, step: number, fit: number): number {
+  private stepGain(role: Role, here: Vector3, axis: number, sign: number, step: number, _fit: number, kind?: FixtureKind): number {
     const p = this.v6.copy(here);
     p.setComponent(axis, p.getComponent(axis) + sign * step);
-    if (p.y < 0.01 || this.inFrameAt(p)) {
+    if (p.y < 0.01 || this.inFrameAt(p, kind)) {
       return -1;
     }
-    return this.roleFit(role, p) - fit;
+    // Compare on the log scale: near the spot it is the same as comparing fits, and far
+    // away it still points the right way (the fit itself is ~0 everywhere out there).
+    const there = this.roleLogFit(role, p);
+    return there - this.roleLogFit(role, here);
   }
 
   private updateScore(delta: number): void {
@@ -2021,9 +2235,18 @@ export class LightingLevelSystem extends createSystem({
     }
     this.sinceNudge += delta;
     this.sceneTime += delta;
-    if (this.houseOn && !this.houseEverOff && /house lights/.test(hint)) {
-      // Only once the player is a while into the scene and still hasn't cut them.
-      if (this.sceneTime > HOUSE_NUDGE_SECONDS && this.sinceNudge > NUDGE_SECONDS && this.lastNudge !== `house:${this.levelIndex}`) {
+    // The quiet gotcha (LevelDef.houseHint 'ambient'): the tip only says "too much
+    // ambient light"; after a while Dee comes to the rescue, once per scene.
+    if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && this.lastNudge !== `house:${this.levelIndex}`) {
+      this.lastNudge = `house:${this.levelIndex}`;
+      this.sinceNudge = 0;
+      this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱');
+    }
+    // Time the house lights have been on while lights are on the set.
+    if (this.houseOn && this.fixtures.some((f) => f.on)) this.houseWork += delta;
+    if (this.houseOn && !this.houseEverOff && this.level.houseHint !== 'ambient' && this.houseWork > HOUSE_NUDGE_SECONDS) {
+      // Only once the player has been placing lights a while with them still on.
+      if (this.sinceNudge > NUDGE_SECONDS && this.lastNudge !== `house:${this.levelIndex}`) {
         this.lastNudge = `house:${this.levelIndex}`;
         this.sinceNudge = 0;
         const text =
@@ -2045,8 +2268,8 @@ export class LightingLevelSystem extends createSystem({
     if (this.hintSince > NUDGE_SECONDS && this.sinceNudge > NUDGE_SECONDS && hint !== this.lastNudge && !framed) {
       this.lastNudge = hint;
       this.sinceNudge = 0;
-      const lead = ['psst. ', 'from here: ', 'tip: '][Math.floor(Math.random() * 3)];
-      this.phone.text('dee', lead + hint.charAt(0).toLowerCase() + hint.slice(1));
+      // Just the tip, in Dee's lowercase voice (ben, round 9: a "from here:" lead-in was confusing).
+      this.phone.text('dee', hint.charAt(0).toLowerCase() + hint.slice(1));
     }
   }
 
