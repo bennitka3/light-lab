@@ -3,6 +3,21 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 8: 2026-11-03 (Greg's audio notes, after playing; ben's direction)
+
+Greg (ben's friend, the round 7 tester; teaches a product-video lighting class) sent two voice notes. ben's call: try his ideas as a **separate beta track** that doesn't touch the seven scenes. Open it with `?track=beta` (add `&scene=N` to jump). Test: `scripts/beta-track.cjs`; `scripts/follow-hints.cjs` also takes a `?track=beta` URL.
+
+| Greg / ben said | Status |
+|---|---|
+| Greg: "in the intro scenes less about moving lights around and instead... adjusting intensity... of the three-point lighting scenario... for the first several scenes and then building up to placement of lights" | **Beta 1B built.** A textbook key/fill/back setup is already rigged and locked in place; every dimmer is wrong. Each light's switch on the iPad has a dimmer (◀ ▶, 10% steps) and the tip says which light is too bright or too dark. Wins only when all three are exactly right. ben: "adding brightness adjustment and movement is very complex with only one slider", so 1B is dimmers only. |
+| Greg: "if you're outdoors and the broadside light and you set up like an overhead silk... adding like a bounce card as like a fill"; ben: "outdoor scene with some people, maybe in a desert... with like overhead lighting where you need to use a sort of diffuser" | **Beta 2 built.** Two hikers on a rock at high noon; the sun is part of the set (you can't move it) and gives them raccoon eyes. Two new kit pieces: an overhead silk (a white frame you hang over them; it really shades the sun and turns it into soft top light) and a bounce card (white side throws fill back up; switched off it shows its black side). |
+| ben: "lighting a car and it's got like an LED wall behind it... a family in a car for a car commercial... a dog with his head out the window"; Greg: "lighting a car... how you light a car", "Otis... a dog should totally be in there" | **Beta 3 built.** An SUV (dad driving, mom riding, the dog with his head out the back window) in front of a curved LED wall showing a coastal highway at golden hour. The wall lights them from behind; the player adds a big soft top light for the paint and a key through the windows on a dimmer at 50%. The track ends on the commercial rolling, not Lake Como. *The dog is a simple procedural stand-in, not Otis yet: needs a photo of Otis. The family are the existing adult models; kids would need new art.* |
+| Greg: "The perfume bottle was a little bit difficult to initially tell that it was a perfume bottle cause it was so massive... maybe it's like a mountain bike... or a motorcycle or a car" | Backlog. The car scene covers "light a car"; scene 3's product is unchanged. Greg's class idea, lighting a model motorcycle and a real one the same way, fits the dollhouse well. |
+| Greg: "outdoor parking lot in the evening or nighttime... outside of like 711" | Backlog (a night exterior: practicals, sodium-vapor color, one motivated source). |
+| Greg: "fake it being a sunny day when it's like super cloudy and like getting dark outside" | Backlog (a big hard "sun" through a window or over a wall, warm, on an overcast set). |
+| Greg: "different narratives... for a certain type of movie... documentary or whatever... what might you be choosing as a gaffer for your tool kit for that sort of type of storytelling" | Backlog, design idea: scenes framed by genre, where picking the kit (hard vs soft, silk vs light) is part of the puzzle. The desert scene's kit already includes wrong tools (a Fresnel and a softbox) to start on that. |
+| Greg: "cats are super popular... totally a dog" | Dog done (beta 3). Cat: backlog. |
+
 ## Round 7: 2026-11-01 (Greg, a friend of ben's, desktop browser, first time playing)
 
 A new player with no briefing. He sent a 43-second screen recording of scene 3 (the product shot) and a text.

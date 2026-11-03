@@ -7,6 +7,7 @@ import {
   createSystem,
   DirectionalLight,
   DistanceGrabbable,
+  DoubleSide,
   Entity,
   Grabbed,
   Group,
@@ -37,7 +38,7 @@ import {
 import { CreatureFeature } from './creature-feature.js';
 import { OPERATOR_ASSET, attachCameraOperator } from './camera-operator.js';
 import { LightingStage, StageLight } from './lighting-components.js';
-import { DEE_WINS, DIRECTOR_WINS, type KitItem, type LevelDef, LEVELS, type Role } from './levels.js';
+import { DEE_WINS, DIRECTOR_WINS, IS_BETA, type KitItem, type LevelDef, type Role, TRACK_LEVELS as LEVELS } from './levels.js';
 import { PHONE_HEIGHT, PHONE_WIDTH, PhoneHud } from './phone-hud.js';
 import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-sets.js';
 import {
@@ -45,6 +46,7 @@ import {
   type FixtureKind,
   KIT_HEIGHT,
   KIT_Z,
+  SILK_SIZE,
   STAGE_DEPTH,
   STAGE_HEIGHT,
   STAGE_WIDTH,
@@ -148,6 +150,10 @@ const LIGHT_QUALITY: Record<
   strip: { color: '#fff1dc', intensity: 0.2, angleDeg: 45, penumbra: 1, shadowRadius: 6 },
   fresnel: { color: '#ffd2a0', intensity: 0.45, angleDeg: 20, penumbra: 0.3, shadowRadius: 1 },
   par: { color: '#ffe2b8', intensity: 0.6, angleDeg: 12, penumbra: 0.15, shadowRadius: 1 },
+  // Light shapers (beta track): the silk re-emits the sun it blocks as a big soft top light,
+  // the bounce card throws a little of it back up into the faces.
+  silk: { color: '#fff4e4', intensity: 0.07, angleDeg: 75, penumbra: 1, shadowRadius: 14 },
+  bounce: { color: '#fff1dc', intensity: 0.05, angleDeg: 65, penumbra: 1, shadowRadius: 10 },
 };
 const CTO_TINT = new Color('#ff9a45');
 
@@ -157,6 +163,8 @@ const KIND_NAMES: Record<FixtureKind, string> = {
   strip: 'strip box',
   fresnel: 'Fresnel',
   par: 'PAR can',
+  silk: 'overhead silk',
+  bounce: 'bounce card',
 };
 
 /** The short name on each light's switch on the iPad. */
@@ -166,11 +174,26 @@ const KIND_LABELS: Record<FixtureKind, string> = {
   strip: 'Strip box',
   fresnel: 'Fresnel',
   par: 'PAR can',
+  silk: 'Silk',
+  bounce: 'Bounce',
 };
 /** The bi-color dial's stops, warm to daylight. Warm roles need the warm end. */
 const KELVIN_STEPS = [3200, 4000, 4800, 5600];
 const WARM_MAX_K = 3600;
 const NEUTRAL_MIN_K = 4800;
+/** A dimmer's stops: 10% to 100% in tens. */
+const DIMMER_STEP = 0.1;
+/** How far off a dimmer can be before it costs the match (one stop off scores about 85%, so the bar climbs as you get close). */
+const DIMMER_TOLERANCE = 0.25;
+
+/**
+ * How much light a dimmer setting lets through. Squared, like a real dimmer's
+ * curve feels to the eye, and 100% runs a bit hotter than the light's usual
+ * output so the gap between key and fill reads on the iPad.
+ */
+function dimmerGain(level: number): number {
+  return 1.8 * level * level;
+}
 
 type Fixture = {
   entity: Entity;
@@ -189,6 +212,8 @@ type Fixture = {
   on: boolean;
   /** Color temperature; only bi-color lights (with a dial) can change it. */
   kelvin: number;
+  /** Brightness, 0.1 to 1; only lights with a dimmer (beta track) can change it. */
+  dimmer: number;
   /** Headset grab bookkeeping for telling a tap from a move. */
   grabTime: number;
   grabStart: Vector3;
@@ -300,6 +325,8 @@ export class LightingLevelSystem extends createSystem({
   private screenWorld = new Vector3();
   private practical?: { on: boolean; shade: MeshStandardMaterial; bulb: PointLight; switch: Switch };
   private greenScreen?: Mesh;
+  /** A silk frame that only exists for the target shot, so the director's version blocks the sun too (beta track). */
+  private targetSilk?: Mesh;
 
   // House lights and switches.
   private houseOn = true;
@@ -624,6 +651,25 @@ export class LightingLevelSystem extends createSystem({
           hovered: () => this.hovered?.item.kind ?? null,
           lightButtons: () => this.lightButtons.map((b) => ({ ...b })),
           kelvin: (i: number) => this.fixtures[i].kelvin,
+          dimmer: (i: number) => this.fixtures[i].dimmer,
+          turnDimmer: (i: number, step: 1 | -1) => this.turnDimmer(this.fixtures[i], step),
+          beta: () => IS_BETA,
+          // The target ('target') or live ('live') shot as a PNG data URL, for tests to look at closely.
+          shotImage: (which: 'target' | 'live') => {
+            const rt = which === 'target' ? this.targetShot : this.shotTarget;
+            const pixels = new Uint8Array(SHOT_W * SHOT_H * 4);
+            this.world.renderer.readRenderTargetPixels(rt, 0, 0, SHOT_W, SHOT_H, pixels);
+            const canvas = document.createElement('canvas');
+            canvas.width = SHOT_W;
+            canvas.height = SHOT_H;
+            const ctx = canvas.getContext('2d')!;
+            const image = ctx.createImageData(SHOT_W, SHOT_H);
+            for (let y = 0; y < SHOT_H; y++) {
+              image.data.set(pixels.subarray((SHOT_H - 1 - y) * SHOT_W * 4, (SHOT_H - y) * SHOT_W * 4), y * SHOT_W * 4);
+            }
+            ctx.putImageData(image, 0, 0);
+            return canvas.toDataURL('image/png');
+          },
           zoom: () => this.ipadZoom,
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
@@ -653,7 +699,7 @@ export class LightingLevelSystem extends createSystem({
           // 'role:N' (role N's target spot).
           screenOf: (what: string | number) => {
             const v = new Vector3();
-            const control = typeof what === 'string' ? /^(light|warmer|cooler|size):(-?\d+)$/.exec(what) : null;
+            const control = typeof what === 'string' ? /^(light|warmer|cooler|dimmer|brighter|size):(-?\d+)$/.exec(what) : null;
             if (what === 'card' || what === 'card-button') {
               v.set(what === 'card' ? 0 : this.ipad.buttonCenter.x, what === 'card' ? 0 : this.ipad.buttonCenter.y, 0);
               this.ipad.object.localToWorld(v);
@@ -709,7 +755,10 @@ export class LightingLevelSystem extends createSystem({
     this.framesSinceLoad = 0;
     this.shownText = '';
 
-    // Set pieces.
+    // Set pieces. The parked C-stand would stand in the desert or in front of the
+    // LED wall (beta track), so it goes away there.
+    const cStand = this.stage.getObjectByName('set-cstand');
+    if (cStand) cStand.visible = level.set !== 'desert' && level.set !== 'led-volume';
     this.set = createLevelSet(level.set);
     this.stage.add(this.set);
     this.greenScreen = (this.set.getObjectByName('green-screen') as Mesh | undefined) ?? undefined;
@@ -789,13 +838,27 @@ export class LightingLevelSystem extends createSystem({
       const fixture = this.fixtures[preset.kit];
       this.roleLocal({ id: 'preset', label: '', kinds: [], kindHint: '', orbit: preset }, fixture.local);
       fixture.on = true;
+      if (preset.dimmer !== undefined) fixture.dimmer = preset.dimmer;
     }
     this.buildLightButtons();
 
     // One hidden light per role, used only to render the target shot.
     for (const role of level.roles) {
       const spot = createSpot(role.kinds[0], role.warm ? KELVIN_MIN : KELVIN_MAX);
+      if (role.level !== undefined) spot.intensity *= dimmerGain(role.level);
       spot.visible = false;
+      if (role.kinds.includes('silk') && role.pos) {
+        // The director's silk: invisible to the camera (it hangs above the frame anyway)
+        // but it shades the sun in the target shot. Shown only while that shot renders.
+        const silk = new Mesh(new PlaneGeometry(SILK_SIZE, SILK_SIZE), new MeshBasicMaterial({ color: '#f4f1ea', side: DoubleSide }));
+        // Both sides, or the shadow pass culls it when the sun looks at its top.
+        silk.rotation.x = -Math.PI / 2;
+        silk.position.set(...role.pos);
+        silk.castShadow = true;
+        silk.visible = false;
+        this.stage.add(silk);
+        this.targetSilk = silk;
+      }
       this.world.scene.add(spot, spot.target);
       this.targetSpots.push(spot);
     }
@@ -853,6 +916,12 @@ export class LightingLevelSystem extends createSystem({
       spot.dispose();
     }
     this.targetSpots = [];
+    if (this.targetSilk) {
+      this.targetSilk.removeFromParent();
+      this.targetSilk.geometry.dispose();
+      (this.targetSilk.material as MeshBasicMaterial).dispose();
+      this.targetSilk = undefined;
+    }
     for (const actor of this.extraActors) {
       actor.removeFromParent();
     }
@@ -887,8 +956,8 @@ export class LightingLevelSystem extends createSystem({
     entity.addComponent(OneHandGrabbable, { rotate: false, translate: true });
     const head = object.getObjectByName('fixture-head')!;
     const face = head.getObjectByName('fixture-face');
-    if (item.dial && face instanceof Mesh) {
-      // Its own face material, so the glow can follow the dial.
+    if ((item.dial || item.dimmer || item.kind === 'silk' || item.kind === 'bounce') && face instanceof Mesh) {
+      // Its own face material, so the glow can follow the dial (or the dimmer, or a shaper's state).
       face.material = (face.material as MeshStandardMaterial).clone();
     }
     const spot = createSpot(item.kind);
@@ -910,6 +979,7 @@ export class LightingLevelSystem extends createSystem({
       local: new Vector3(kitX, KIT_HEIGHT, KIT_Z),
       on: false,
       kelvin: KELVIN_MAX,
+      dimmer: 1,
       grabTime: 0,
       grabStart: new Vector3(),
     };
@@ -1036,7 +1106,11 @@ export class LightingLevelSystem extends createSystem({
     const headset = this.immersive;
     this.showPage({
       full: true,
-      eyebrow: this.levelIndex > 0 ? `Lucky Break · Starting at scene ${this.levelIndex + 1}` : 'Lucky Break · How to play',
+      eyebrow: IS_BETA
+        ? `Lucky Break · Beta track${this.levelIndex > 0 ? ` · Starting at scene ${this.levelIndex + 1}` : ''}`
+        : this.levelIndex > 0
+        ? `Lucky Break · Starting at scene ${this.levelIndex + 1}`
+        : 'Lucky Break · How to play',
       title: 'Twelve years as Background Extra #47.',
       body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       steps: headset
@@ -1052,7 +1126,9 @@ export class LightingLevelSystem extends createSystem({
             'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
             'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
           ],
-      footer: headset
+      footer: IS_BETA && !this.xrStatus
+        ? 'BETA TRACK: three experimental scenes (dimmers, a desert silk, a car on an LED wall). The main game is unchanged.'
+        : headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
         : this.xrStatus
         ? this.xrStatus
@@ -1067,15 +1143,22 @@ export class LightingLevelSystem extends createSystem({
   private showBriefCard(): void {
     const level = this.level;
     // The iPad shows only the shots and the tip; the director gives the brief from the set.
-    this.showPage({ eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length}`, body: '' });
+    this.showPage({ eyebrow: this.sceneLabel(), body: '' });
     this.say(level.quote);
     this.sayNext(level.objective);
+  }
+
+  /** The callout over the target shot: "Scene 3 of 7", or on the beta track "Beta 2 of 3 · Desert at noon". */
+  private sceneLabel(): string {
+    return IS_BETA
+      ? `Beta ${this.levelIndex + 1} of ${LEVELS.length} · ${this.level.title}`
+      : `Scene ${this.levelIndex + 1} of ${LEVELS.length}`;
   }
 
   private showWinCard(): void {
     const last = this.levelIndex === LEVELS.length - 1;
     this.showPage({
-      eyebrow: `Scene ${this.levelIndex + 1} of ${LEVELS.length}`,
+      eyebrow: this.sceneLabel(),
       body: '',
       button: last ? 'Roll!' : 'Next scene',
     });
@@ -1100,6 +1183,14 @@ export class LightingLevelSystem extends createSystem({
     }
     this.renderTargetShot();
     this.ipad.setStatus(100, '', true);
+    if (!this.greenScreen) {
+      // The beta track ends on the car commercial, not Lake Como.
+      this.say('"Print it. That\'s the commercial."', true);
+      this.sayNext('"And somebody get that dog an agent."', true);
+      this.phone.text('dee', 'the client is crying. the DOG is trending 🐶');
+      this.showPage({ eyebrow: 'Rolling', body: '', button: 'Take a bow' });
+      return;
+    }
     this.say('"Is that... Lake Como? I\'m crying. Who ARE you?"', true);
     this.sayNext('"Background Extra #47, would you come to the front, please."', true);
     this.phone.text('dee', 'THE GREEN SCREEN IS LAKE COMO NOW and the light on their faces matches 😭😭');
@@ -1116,7 +1207,9 @@ export class LightingLevelSystem extends createSystem({
       full: true,
       eyebrow: "That's a wrap",
       title: 'LUCKY BREAK',
-      body: 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
+      body: IS_BETA
+        ? 'Beta track complete. Dimmers, an overhead silk, a bounce card and an LED volume: all yours.'
+        : 'Starring you, formerly Background Extra #47, now Gaffer. Key, fill, back light, product, practicals, low-key, magic hour and green screen: all yours.',
       footer: 'A film by ben, lit by you, built by Claude.',
       button: 'Play again',
     });
@@ -1219,6 +1312,14 @@ export class LightingLevelSystem extends createSystem({
     this.resetHold();
   }
 
+  /** Turns a light's dimmer one stop down (-1) or up (+1). */
+  private turnDimmer(fixture: Fixture, step: 1 | -1): void {
+    if (!fixture.item.dimmer) return;
+    fixture.dimmer = MathUtils.clamp(Math.round((fixture.dimmer + step * DIMMER_STEP) * 10) / 10, DIMMER_STEP, 1);
+    devLog(`light ${fixture.item.kind} dimmed to ${Math.round(fixture.dimmer * 100)}%`);
+    this.resetHold();
+  }
+
   /** Builds the iPad's light row for the scene: HOUSE, each light in the kit, then the lamp. */
   private buildLightButtons(): void {
     const screens = this.level.kit.filter((item) => item.aim === 'screen').length;
@@ -1231,7 +1332,12 @@ export class LightingLevelSystem extends createSystem({
         screenN += 1;
         label = screens > 1 ? `Screen ${screenN}` : 'Screen';
       }
-      this.lightButtons.push({ label, on: fixture.on, kelvin: item.dial ? fixture.kelvin : undefined });
+      this.lightButtons.push({
+        label,
+        on: fixture.on,
+        kelvin: item.dial ? fixture.kelvin : undefined,
+        dimmer: item.dimmer ? fixture.dimmer : undefined,
+      });
     }
     if (this.practical) {
       this.lightButtons.push({ label: 'Lamp', on: this.practical.on });
@@ -1248,6 +1354,7 @@ export class LightingLevelSystem extends createSystem({
       if (!button) return;
       button.on = fixture.on;
       if (button.kelvin !== undefined) button.kelvin = fixture.kelvin;
+      if (button.dimmer !== undefined) button.dimmer = fixture.dimmer;
     });
     if (this.practical && buttons.length > this.fixtures.length + 1) {
       buttons[this.fixtures.length + 1].on = this.practical.on;
@@ -1325,6 +1432,9 @@ export class LightingLevelSystem extends createSystem({
     } else if (control.type === 'warmer' || control.type === 'cooler') {
       const fixture = this.fixtures[control.index - 1];
       if (fixture) this.turnDial(fixture, control.type === 'warmer' ? -1 : 1);
+    } else if (control.type === 'dimmer' || control.type === 'brighter') {
+      const fixture = this.fixtures[control.index - 1];
+      if (fixture) this.turnDimmer(fixture, control.type === 'dimmer' ? -1 : 1);
     }
   }
 
@@ -1345,7 +1455,8 @@ export class LightingLevelSystem extends createSystem({
         fixture.grabStart.copy(fixture.local);
       }
       fixture.grabTime += Math.max(delta, 1e-4);
-      if (grabbed) {
+      // A rigged light (LevelDef.locked) snaps back: it can be tapped and dimmed, not moved.
+      if (grabbed && !this.level.locked) {
         fixture.object.getWorldPosition(this.v1);
         fixture.local.copy(this.stage.worldToLocal(this.v1));
         return;
@@ -1417,14 +1528,37 @@ export class LightingLevelSystem extends createSystem({
     }
 
     const aim = fixture.item.aim === 'screen' ? this.screenWorld : this.aimWorld;
-    fixture.head.lookAt(aim);
+    const kind = fixture.item.kind;
+    if (kind === 'silk') {
+      // A silk stays level over the cast; it isn't aimed like a light.
+      fixture.head.rotation.set(0, 0, 0);
+    } else {
+      fixture.head.lookAt(aim);
+    }
     fixture.object.getWorldPosition(this.v1);
     fixture.spot.visible = fixture.on;
     fixture.spot.position.copy(this.v1);
     fixture.spot.target.position.copy(aim);
     fixture.spot.target.updateMatrixWorld();
+    if (fixture.item.dimmer) {
+      const quality = LIGHT_QUALITY[kind];
+      const warm = MathUtils.clamp((KELVIN_MAX - fixture.kelvin) / (KELVIN_MAX - KELVIN_MIN), 0, 1);
+      fixture.spot.intensity = quality.intensity * (1 + 0.4 * warm) * dimmerGain(fixture.dimmer);
+    }
     if (fixture.face) {
-      fixture.face.emissiveIntensity = fixture.on ? 1.6 : 0;
+      const glow = fixture.item.dimmer ? 0.3 + 0.7 * fixture.dimmer : 1;
+      if (kind === 'silk') {
+        // Rigged: the fabric is stretched on the frame (and shades the sun). Off: an empty frame.
+        fixture.face.emissiveIntensity = fixture.on ? 0.25 : 0;
+        const fabric = fixture.head.getObjectByName('fixture-face');
+        if (fabric) fabric.visible = fixture.on;
+      } else if (kind === 'bounce') {
+        // Off, the card is turned to its black side; on, the white side catches the sun.
+        fixture.face.color.set(fixture.on ? '#f4f1ea' : '#18181b');
+        fixture.face.emissiveIntensity = fixture.on ? 0.35 : 0;
+      } else {
+        fixture.face.emissiveIntensity = fixture.on ? 1.6 * glow : 0;
+      }
     }
     fixture.led.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
   }
@@ -1528,9 +1662,11 @@ export class LightingLevelSystem extends createSystem({
       spot.target.updateMatrixWorld();
       spot.visible = true;
     });
+    if (this.targetSilk) this.targetSilk.visible = true;
     try {
       this.renderShot(this.targetShot, false);
     } finally {
+      if (this.targetSilk) this.targetSilk.visible = false;
       for (const spot of this.targetSpots) {
         spot.visible = false;
       }
@@ -1578,10 +1714,12 @@ export class LightingLevelSystem extends createSystem({
     // spot they are actually in, whichever was switched on first.
     const choice = this.bestAssignment(level.roles, on);
     const used = new Set<Fixture>();
-    const assigned: { role: Role; fixture?: Fixture; fit: number }[] = level.roles.map((role, i) => {
+    const assigned: { role: Role; fixture?: Fixture; fit: number; place: number; dim: number }[] = level.roles.map((role, i) => {
       const fixture = choice[i];
       if (fixture) used.add(fixture);
-      return { role, fixture, fit: fixture ? this.roleFit(role, fixture.local) : 0 };
+      const place = fixture ? this.roleFit(role, fixture.local) : 0;
+      const dim = fixture ? this.dimmerFit(role, fixture) : 0;
+      return { role, fixture, fit: place * dim, place, dim };
     });
     const extras = on.filter((f) => !used.has(f));
     let fit = assigned.reduce((sum, a) => sum + a.fit, 0) / Math.max(assigned.length, 1);
@@ -1640,11 +1778,44 @@ export class LightingLevelSystem extends createSystem({
       score = Math.min(score, 70);
       return { score, hint: `Too many lights: switch off the ${itemName(extras[0].item)}.` };
     }
+    // Dimmers (beta track): once the lights are in place, say which one is too bright or too dark.
+    const placed = assigned.reduce((a, b) => (b.place < a.place ? b : a));
+    if (placed.place > 0.85 || level.locked) {
+      const dimHint = this.dimmerHint(assigned);
+      if (dimHint) return { score, hint: dimHint };
+    }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
     if (this.houseOn && worst.fit > 0.85) {
       return { score, hint: 'Looks right. Cut the house lights when you want to roll.' };
     }
     return { score, hint: this.placeHint(worst.role, worst.fixture!), fixture: worst.fixture };
+  }
+
+  /** How close a light's dimmer is to the role's brightness (1 when it has no dimmer or the role doesn't care). */
+  private dimmerFit(role: Role, fixture: Fixture): number {
+    if (!fixture.item.dimmer || role.level === undefined) return 1;
+    return Math.exp(-(((fixture.dimmer - role.level) / DIMMER_TOLERANCE) ** 2));
+  }
+
+  /** The tip for the dimmer furthest off, or '' when every dimmer is right. */
+  private dimmerHint(assigned: { role: Role; fixture?: Fixture }[]): string {
+    let worstErr = 0;
+    let worst: { role: Role; fixture?: Fixture } | undefined;
+    for (const a of assigned) {
+      if (!a.fixture?.item.dimmer || a.role.level === undefined) continue;
+      const err = a.fixture.dimmer - a.role.level;
+      if (Math.abs(err) > Math.abs(worstErr) + 1e-6) {
+        worstErr = err;
+        worst = a;
+      }
+    }
+    if (!worst || Math.abs(worstErr) < 0.05) return '';
+    const lower = worst.role.label.toLowerCase();
+    const name = KIND_NAMES[worst.fixture!.item.kind];
+    const lot = Math.abs(worstErr) >= 0.3 ? 'way ' : '';
+    return worstErr > 0
+      ? `The ${lower} is ${lot}too bright. Dim the ${name} (◀ on the iPad).`
+      : `The ${lower} is ${lot}too dark. Bring the ${name} up (▶ on the iPad).`;
   }
 
   /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
@@ -1795,7 +1966,7 @@ export class LightingLevelSystem extends createSystem({
       }
     } else if (bestAxis === 0) {
       move = `${verb} the ${lower}${bit} toward camera-${bestSign < 0 ? 'left' : 'right'}.`;
-    } else if (role.pos) {
+    } else if (role.pos && role.aim === 'screen') {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
     } else {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} back, away from the camera.` : `${verb} the ${lower}${bit} forward, toward the camera.`;
@@ -2172,7 +2343,8 @@ export class LightingLevelSystem extends createSystem({
       if (!fixture) continue;
       used.add(fixture);
       fixture.on = true;
-      this.roleLocal(role, fixture.local);
+      if (fixture.item.dimmer && role.level !== undefined) fixture.dimmer = role.level;
+      if (!this.level.locked) this.roleLocal(role, fixture.local);
     }
   }
 
@@ -2275,6 +2447,11 @@ export class LightingLevelSystem extends createSystem({
     if (this.downPointer.distanceTo(this.v3.set(event.clientX, event.clientY)) > TAP_MAX_PIXELS) {
       this.dragMoved = true;
     }
+    if (this.dragged && this.level.locked) {
+      // Rigged lights don't move; a click still flips the switch.
+      this.lastPointer.set(event.clientX, event.clientY);
+      return;
+    }
     if (this.dragged && event.shiftKey) {
       // Shift-drag raises and lowers the held light.
       const dy = event.clientY - this.lastPointer.y;
@@ -2354,7 +2531,7 @@ export class LightingLevelSystem extends createSystem({
       }
       return;
     }
-    if (this.dragged) {
+    if (this.dragged && !this.level.locked) {
       // Raise or lower the held light, and keep dragging at its new height.
       this.dragged.local.y = MathUtils.clamp(this.dragged.local.y - event.deltaY * 0.00015, MIN_HEIGHT, MAX_HEIGHT);
       this.resetDragPlane(this.dragged);
