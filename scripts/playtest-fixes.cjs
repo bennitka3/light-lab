@@ -36,7 +36,8 @@ const { chromium } = require('playwright');
   await page.mouse.click(button.x, button.y);
   await wait(500);
   check('iPad Go button starts scene 1', (await state()).phase === 'playing');
-  await wait(5000);
+  // Round 9: texts wait for you to read the last one (about 0.25 s a word), so give it longer.
+  await wait(11000);
   const texts = await api(() => window.lightLab.texts());
   check('Dee texts the intro and a tip', texts.length >= 3 && texts[0].startsWith('dee:'), texts);
   await page.screenshot({ path: `${out}/02-scene1-phone.png` });

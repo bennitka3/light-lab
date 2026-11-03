@@ -51,11 +51,13 @@ const TRIALS = Number(process.env.TRIALS || 6);
           for (const i of lit) {
             const p = ll.fixtures()[i].local;
             const home = { x: p.x, y: p.y, z: p.z };
+            let tries = 0;
             do {
               p.x = home.x + rand() * 0.06;
               p.z = home.z + rand() * 0.06;
               p.y = Math.max(0.03, home.y + rand() * 0.05);
-            } while (ll.inFrame());
+            } while (ll.inFrame() && ++tries < 200);
+            if (ll.inFrame()) throw new Error(`scene ${scene + 1}: can't knock light ${i} anywhere out of the shot (is its spot in frame?)`);
           }
           const win = ll.beta() ? ({ 1: 90 }[scene] ?? 85) : ({ 0: 90 }[scene] ?? 85);
           let steps = 0;

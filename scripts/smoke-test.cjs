@@ -34,6 +34,15 @@ const { chromium } = require('playwright');
   results.houseStartsOn = await api(() => window.lightLab.houseOn());
   // The iPad's light row is drawn on the next frame after the scene starts.
   await page.waitForFunction(() => window.lightLab.screenOf('light:0') !== null, null, { timeout: 10000 });
+  // Let the shader warm-up finish first: in software rendering each warm-up frame is slow.
+  await page.waitForFunction(() => window.lightLab.warmupDone(), null, { timeout: 30000 });
+  // And let the iPad finish shrinking from its title size, so the button holds still.
+  for (let prev = null, i = 0; i < 20; i++) {
+    const p = await at('light:0');
+    if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) < 0.5) break;
+    prev = p;
+    await page.waitForTimeout(250);
+  }
   await click(await at('light:0'));
   results.houseSwitchWorks = !(await api(() => window.lightLab.houseOn()));
 

@@ -442,7 +442,8 @@ export const BETA_LEVELS: LevelDef[] = [
         label: 'Bounce card',
         kinds: ['bounce'],
         kindHint: 'the bounce card (white foam core)',
-        orbit: { az: 30, el: -5, d: 0.12 },
+        // Off to the side enough that the card stays out of the shot (it has width).
+        orbit: { az: 45, el: -5, d: 0.13 },
       },
     ],
     winScore: 85,
