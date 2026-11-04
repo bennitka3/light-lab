@@ -51,7 +51,15 @@ export type Role = {
 };
 
 /** A light the scene starts with already placed and switched on (kit index, orbit around the aim point). */
-export type Preset = { kit: number; az: number; el: number; d: number; dimmer?: number };
+export type Preset = {
+  kit: number;
+  az: number;
+  el: number;
+  d: number;
+  dimmer?: number;
+  /** Knocked over: the stand is as low as it goes, on the floor (only its spot around the cast is from the orbit). */
+  onFloor?: boolean;
+};
 
 /** A text message on the player's phone. */
 export type Text = { from: 'dee' | 'mom'; text: string };
@@ -78,15 +86,18 @@ export type LevelDef = {
   winScore: number;
   quote: string;
   objective: string;
-  lesson: string;
   /** Dee's gossip text after the win (the story beat between scenes). */
   after: string;
   /** Lights already set up when the scene starts (the player fixes what is wrong). */
   preset?: Preset[];
   /** Whether the house lights start on. Defaults to true. */
   houseStartsOn?: boolean;
-  /** Dee's tip, texted when the scene starts. */
-  tip: string;
+  /**
+   * Dee's notes, texted when the scene starts. ben, round 11: Dee is your training
+   * guide. The iPad tip says WHAT to do; Dee says WHY, and where a real gaffer puts
+   * it. Short (they must all fit on the phone together), no button instructions.
+   */
+  dee: string[];
   /** Extra texts that arrive after the win. */
   texts?: Text[];
   /** The lights are rigged in place: they can be switched and dimmed but not moved. */
@@ -126,10 +137,12 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     winScore: 90,
     quote: '"You! Lighting! Make the talent look good."',
     objective: 'Kill the house lights. Then one soft key: 45° to the side, a bit above the eyes.',
-    lesson: 'Soft key, 45° to the side, a little above the eyes. Flattering on anyone.',
     directorWin: '"...Hm. You. Stick around."',
     after: 'did the director just TALK to you?? he never talks to anyone 👀',
-    tip: 'Big square softbox = your key. Kill the house lights first (HOUSE on the iPad), then put it front-left of him, a little above his eyes.',
+    dee: [
+      "key light = the main light, the one that shapes the face. big + soft = flattering on anyone",
+      "real gaffers put it about 45° off the camera, a bit above the eyes, so the shadow falls down and away",
+    ],
   },
   {
     id: 'interview',
@@ -140,9 +153,10 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     directorsChair: false,
     camera: { x: 0.03, z: 0.14, fov: 26 },
     kit: [{ kind: 'softbox' }, { kind: 'panel' }, { kind: 'fresnel' }],
-    // The real gaffer's three-point setup, with the key kicked round to the wrong side.
+    // The real gaffer's three-point setup, with the key kicked over: knocked round to the
+    // wrong side and down on the floor (ben, round 11: "start on the lowest point ... on the ground").
     preset: [
-      { kit: 0, az: 70, el: 0, d: 0.2 },
+      { kit: 0, az: 70, el: 0, d: 0.2, onFloor: true },
       { kit: 1, az: 45, el: 10, d: 0.19 },
       { kit: 2, az: 150, el: 45, d: 0.14 },
     ],
@@ -172,10 +186,13 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     ],
     winScore: 85,
     quote: '"On location at the professor\'s house. The real gaffer lit this before he quit, then somebody kicked a light."',
-    objective: 'Key, fill and back light are already up. One of them got bumped. Find it and put it back.',
-    lesson: 'Three-point lighting: the key shapes the face, the fill softens its shadows, the back light separates him from the background.',
-    after: 'the professor is asking if you do weddings 😂',
-    tip: 'Key = softbox (shapes the face). Fill = LED panel (softens). Back = Fresnel (outlines him). One of them is on the wrong side 👀',
+    objective: 'Key, fill and back light were all set up. Somebody kicked one over. Find it and put it back.',
+    after: 'ok you can MOVE lights now. who even are you. also the professor is asking if you do weddings 😂',
+    dee: [
+      "someone kicked one of the lights over 😬 you can grab the lights and move them",
+      "key = big soft light on one side of his face. fill = dimmer, the other side, softens the shadows",
+      "back light = high behind him. it outlines his hair so he pops off the background",
+    ],
   },
   {
     id: 'product',
@@ -183,8 +200,9 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     set: 'product',
     actors: [],
     directorsChair: false,
-    aim: [0, 0.074, -0.06],
-    camera: { x: 0, z: 0.14, fov: 16 },
+    // The bike on its riser: aim at the middle of the frame (0.6 m up, real).
+    aim: [0, 0.045, -0.06],
+    camera: { x: 0, z: 0.14, fov: 30 },
     kit: [{ kind: 'fresnel' }, { kind: 'strip' }, { kind: 'softbox' }, { kind: 'par' }],
     roles: [
       {
@@ -199,15 +217,18 @@ export const CLASSIC_LEVELS: LevelDef[] = [
         label: 'Rim light',
         kinds: ['strip'],
         kindHint: 'a tall, thin soft source (the strip box)',
-        orbit: { az: -125, el: 10, d: 0.12 },
+        // Off to the side and a touch behind: the bike is long, so further out than the old bottle's.
+        orbit: { az: -105, el: 10, d: 0.17 },
       },
     ],
     winScore: 85,
-    quote: '"The sponsor\'s perfume. Make that bottle look expensive."',
-    objective: 'Glass loves a big soft light from above and a thin rim of light on its edge.',
-    lesson: 'Products: a soft top light gives shape, a strip light behind draws a crisp edge on the glass.',
+    quote: '"The sponsor\'s new bike. Make it look like it costs ten grand."',
+    objective: 'Shiny paint loves a big soft light from above and a thin rim of light along its edge.',
     after: 'the sponsor just sent a fruit basket to "Lighting Genius (name unknown)" lmao',
-    tip: 'Glass is all reflections. Big softbox high above it, skinny strip box behind it off to one side. Keep every stand OUT of the shot.',
+    dee: [
+      "shiny stuff shows you reflections, not light. a big softbox up high = one long clean highlight on the paint",
+      "a strip light behind it draws a thin bright edge along the frame so the bike pops off the black",
+    ],
   },
   {
     id: 'living-room',
@@ -231,9 +252,11 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Cozy evening scene. The lamp is in the shot, so the light has to make sense."',
     objective: 'Switch on the lamp in the shot. Then light him from the lamp\'s side, in the lamp\'s warm color.',
-    lesson: 'Motivated light: the key comes from where a real lamp in the scene would light him, in its color.',
     after: "uh oh. the real gaffer is back from lunch. he's just watching you. he looks scared",
-    tip: 'Lamp on first (tap it, or its button on the iPad). Then the bi-color softbox, dialed down to 3200K, from the lamp\'s side, camera-right.',
+    dee: [
+      "the lamp is in the shot, so your light has to look like it comes FROM the lamp",
+      "lamps are warm, about 3200K. so the key comes from the lamp's side, in the lamp's color",
+    ],
   },
   {
     id: 'interrogation',
@@ -255,9 +278,11 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Detective drama. I want him sweating under one hard light."',
     objective: 'One hard light, high and nearly straight overhead. Nothing else.',
-    lesson: 'Low-key lighting: one hard top light, deep shadows. The dark does the storytelling.',
     after: "craft services is giving you the good sandwich now. you've made it 🥪",
-    tip: 'One hard light (Fresnel or PAR) almost straight over his head. Raise it high and it hangs from the grid, out of the shot.',
+    dee: [
+      "one hard light, nearly straight overhead. hard = sharp shadows",
+      "low-key lighting: the dark does the storytelling. real ones hang from the grid, out of the shot",
+    ],
   },
   {
     id: 'sunset',
@@ -287,9 +312,11 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Golden hour on a soundstage. Fake me a sunset."',
     objective: 'A low, warm, hard sun from behind him, and a soft fill on his face.',
-    lesson: 'Magic hour: a low warm backlight plus a gentle fill. Color temperature: low Kelvin is warm, high Kelvin is daylight blue.',
     after: '',
-    tip: 'Sun = the bi-color Fresnel dialed to 3200K, low and behind him on camera-left. LED panel soft on his face from camera-right.',
+    dee: [
+      "magic hour = the sun low and warm behind them. 3200K is warm, 5600K is daylight blue",
+      "fake the sun with a hard light low behind him, then a soft fill so his face isn't a silhouette",
+    ],
     texts: [{ from: 'mom', text: 'Are you famous yet? 🎬❤️' }],
   },
   {
@@ -343,9 +370,11 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"The big one. Romantic dinner on Lake Como, which we are absolutely not paying to fly to."',
     objective: 'Light the green screen evenly with the two SCREEN panels, hung high on either side and out of the shot. Then a soft key and a back light on the couple.',
-    lesson: 'Green screen: light the screen evenly on its own, light the actors separately, and keep them apart.',
     after: '',
-    tip: 'Screen first: hang the two SCREEN panels up high, one each side. Then softbox key and a back light on the couple. Nothing in the shot!',
+    dee: [
+      "green screen rule: light the screen on its own, nice and even. one panel each side, up high",
+      "then the couple, separately: soft key, plus a back light so they don't blend into the green",
+    ],
   },
 ];
 
@@ -388,10 +417,13 @@ export const BETA_LEVELS: LevelDef[] = [
     winScore: 96,
     quote: '"You! Lighting! The gaffer rigged these, then fiddled with every dimmer and walked out."',
     objective: 'Don\'t move anything. Just set how bright each light is, then kill the house lights and roll.',
-    lesson: 'Key = brightest. Fill = about half. Back = just enough to outline him. That\'s three-point lighting.',
     directorWin: '"...Hm. You. Stick around."',
     after: 'did the director just TALK to you?? he never talks to anyone 👀',
-    tip: '◀ ▶ under each light on the iPad sets how bright it is. don\'t touch the stands. house lights off at the end',
+    dee: [
+      "key = the main light, the one that shapes his face. the softbox here, so it's the brightest",
+      "fill = the LED panel on the other side. softens the key's shadows, about half as bright",
+      "back light = the Fresnel behind him. just a shine on his hair so he pops off the background",
+    ],
   },
   {
     id: 'beta-2-key-dimmer',
@@ -414,9 +446,11 @@ export const BETA_LEVELS: LevelDef[] = [
     winScore: 90,
     quote: '"New setup. Same guy. This time you place the light."',
     objective: 'One soft key: 45° to the side, a bit above the eyes. Then set its brightness.',
-    lesson: 'Place it first, then dim it. Moving a light closer also makes it brighter, so get the spot right before you touch the dimmer.',
     after: 'ok you can MOVE lights now. who even are you',
-    tip: 'softbox = your key. front-left of him, a bit above his eyes. then the dimmer',
+    dee: [
+      "softbox = your key. front-left of him, a bit above his eyes",
+      "place it first, then dim it. moving a light closer makes it brighter too",
+    ],
   },
   {
     id: 'beta-3-desert',
@@ -450,9 +484,11 @@ export const BETA_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"High noon in the desert. That sun is giving everyone raccoon eyes. Fix it. You can\'t move the sun."',
     objective: 'Stand the big silk over their heads to soften the sun. Then a bounce card low in front to fill their faces.',
-    lesson: 'Harsh sun: a silk overhead softens it, a bounce card throws some back into their faces. You shape daylight, you don\'t fight it.',
     after: 'the PA just asked if you\'ve done a lot of westerns 🤠',
-    tip: 'no lights needed out here. drag the silk over their heads, then the bounce card in front',
+    dee: [
+      "you can't move the sun, you shape it. a silk overhead turns harsh sun into soft light",
+      "a bounce card throws some back up into their faces, so their eyes aren't dark holes",
+    ],
   },
   {
     id: 'beta-4-car',
@@ -486,15 +522,58 @@ export const BETA_LEVELS: LevelDef[] = [
     winScore: 85,
     quote: '"Car commercial. The family, the SUV, the dog. The LED wall does the scenery. You do the rest."',
     objective: 'The LED wall already lights them from behind. Add a big soft top light for the paint, and a key through the windows at half power.',
-    lesson: 'On an LED volume the wall is your background and your ambient light. Add a big soft source for the paint and a gentle key for faces.',
     directorWin: '"Somebody get that dog an agent."',
-    after: 'the dog has more followers than you now. and you\'re in this business 🐶',
-    tip: 'softbox high over the car. LED panel low, front-left, at half',
+    after: 'the dog has more followers than you now 🐶',
+    dee: [
+      "on an LED volume the wall is your background AND part of your light",
+      "a big soft source over a car = one long clean highlight on the paint. faces just need a gentle key",
+    ],
   },
 ];
 
+/**
+ * Scene 3 of the main playthrough (ben, round 11): after learning to dim (scene 1) and to
+ * move lights (scene 2, the kicked light), place AND dim two lights: a key and a back light.
+ */
+const KEY_AND_BACK: LevelDef = {
+  id: 'key-back-dimmer',
+  title: 'Social clip: key and back',
+  set: 'studio',
+  actors: [{ pos: [0, 0, -0.06] }],
+  directorsChair: true,
+  camera: { x: 0, z: 0.14, fov: 26 },
+  kit: [{ kind: 'fresnel', dimmer: true }, { kind: 'softbox', dimmer: true }, { kind: 'par' }],
+  roles: [
+    {
+      id: 'key',
+      label: 'Key light',
+      kinds: ['softbox'],
+      kindHint: SOFT_KEY,
+      orbit: { az: -45, el: 35, d: 0.16 },
+      level: 0.7,
+    },
+    {
+      id: 'back',
+      label: 'Back light',
+      kinds: ['fresnel'],
+      kindHint: 'the Fresnel (a hard light, for a crisp edge)',
+      orbit: { az: 150, el: 45, d: 0.14 },
+      level: 0.5,
+    },
+  ],
+  winScore: 85,
+  quote: '"New setup. Same guy. Key light and a back light, and get the levels right."',
+  objective: 'Place a soft key and a back light, then set how bright each one is.',
+  after: "two lights AND dimmers. the camera op just asked me if you're union 😬",
+  dee: [
+    'key first: softbox, 45° off the camera, a bit above his eyes.',
+    'back light goes high behind him, on the opposite side from the key. just a rim on his hair',
+    'place first, dim second. moving a light closer makes it brighter too',
+  ],
+};
+
 const scene = (id: string): LevelDef => {
-  const found = [...CLASSIC_LEVELS, ...BETA_LEVELS].find((level) => level.id === id);
+  const found = [...CLASSIC_LEVELS, ...BETA_LEVELS, KEY_AND_BACK].find((level) => level.id === id);
   if (!found) throw new Error(`no scene ${id}`);
   return found;
 };
@@ -507,8 +586,8 @@ const scene = (id: string): LevelDef => {
  */
 export const LEVELS: LevelDef[] = [
   scene('beta-1-tutorial'),
-  scene('beta-2-key-dimmer'),
   scene('interview'),
+  scene('key-back-dimmer'),
   scene('product'),
   scene('beta-3-desert'),
   scene('living-room'),

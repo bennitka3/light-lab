@@ -12,6 +12,8 @@ import {
   PointLight,
   SphereGeometry,
   SRGBColorSpace,
+  TorusGeometry,
+  Vector3,
 } from '@iwsdk/core';
 import type { SetId } from '../levels.js';
 import { STAGE_DEPTH, STAGE_HEIGHT, STAGE_WIDTH } from './soundstage.scene-asset.js';
@@ -233,26 +235,118 @@ function createStudySet(): Group {
   return set;
 }
 
+/**
+ * A road bike in real meters (wheels 0.7 m across, 1.75 m long), side-on along X:
+ * the product in scene 4. ben, round 11: the perfume bottle was "MASSIVE for a
+ * perfume bottle" at the size the shot needs, so the sponsor's product is now
+ * something that is that big in real life. The caller scales it to the set.
+ */
+function createBicycle(): Group {
+  const bike = new Group();
+  bike.name = 'bicycle';
+  const paint = new MeshStandardMaterial({ color: '#b3121f', roughness: 0.18, metalness: 0.35 });
+  const chrome = new MeshStandardMaterial({ color: '#d7d9dc', roughness: 0.15, metalness: 1 });
+  const rubber = mat('#141416', 0.85);
+  const black = mat('#1d1d20', 0.5, 0.3);
+  const tube = (a: Vector3, b: Vector3, r: number, material: MeshStandardMaterial): Mesh => {
+    const length = a.distanceTo(b);
+    const mesh = new Mesh(new CylinderGeometry(r, r, length, 12), material);
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), b.clone().sub(a).normalize());
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  };
+  const R = 0.34;
+  const rear = new Vector3(-0.5, R, 0);
+  const front = new Vector3(0.52, R, 0);
+  for (const hub of [rear, front]) {
+    const wheel = new Group();
+    wheel.position.copy(hub);
+    const tire = new Mesh(new TorusGeometry(R - 0.016, 0.016, 10, 48), rubber);
+    const rim = new Mesh(new TorusGeometry(R - 0.04, 0.009, 8, 48), chrome);
+    wheel.add(tire, rim);
+    for (let i = 0; i < 16; i++) {
+      const angle = (i / 16) * Math.PI * 2;
+      wheel.add(tube(new Vector3(0, 0, 0), new Vector3(Math.cos(angle) * (R - 0.045), Math.sin(angle) * (R - 0.045), 0), 0.0025, chrome));
+    }
+    const hubBody = new Mesh(new CylinderGeometry(0.02, 0.02, 0.1, 12), chrome);
+    hubBody.rotation.x = Math.PI / 2;
+    wheel.add(hubBody);
+    wheel.traverse((child) => {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    });
+    bike.add(wheel);
+  }
+  // The frame: a classic diamond.
+  const bb = new Vector3(-0.04, 0.3, 0);
+  const seatTop = new Vector3(-0.17, 0.82, 0);
+  const headTop = new Vector3(0.38, 0.84, 0);
+  const headBottom = new Vector3(0.42, 0.68, 0);
+  for (const [a, b] of [
+    [bb, seatTop],
+    [seatTop, headTop],
+    [bb, headBottom],
+    [headTop, headBottom],
+  ]) {
+    bike.add(tube(a, b, 0.022, paint));
+  }
+  for (const z of [-0.05, 0.05]) {
+    const stayEnd = new Vector3(rear.x, rear.y, z);
+    bike.add(tube(new Vector3(bb.x, bb.y, z * 0.4), stayEnd, 0.011, paint));
+    bike.add(tube(new Vector3(seatTop.x, seatTop.y - 0.04, z * 0.4), stayEnd, 0.01, paint));
+    bike.add(tube(new Vector3(headBottom.x, headBottom.y, z * 0.4), new Vector3(front.x, front.y, z), 0.012, paint));
+  }
+  // Seat post and saddle.
+  const postTop = new Vector3(-0.2, 0.95, 0);
+  bike.add(tube(seatTop, postTop, 0.013, chrome));
+  const saddle = new Mesh(new BoxGeometry(0.26, 0.035, 0.1), black);
+  saddle.position.set(-0.19, 0.97, 0);
+  saddle.castShadow = true;
+  bike.add(saddle);
+  // Stem and drop bars.
+  const stemTop = new Vector3(0.44, 0.92, 0);
+  bike.add(tube(headTop, new Vector3(0.37, 0.92, 0), 0.014, chrome));
+  bike.add(tube(new Vector3(0.37, 0.92, 0), stemTop, 0.012, chrome));
+  bike.add(tube(new Vector3(stemTop.x, stemTop.y, -0.21), new Vector3(stemTop.x, stemTop.y, 0.21), 0.012, black));
+  for (const z of [-0.21, 0.21]) {
+    bike.add(tube(new Vector3(stemTop.x, stemTop.y, z), new Vector3(stemTop.x + 0.08, stemTop.y - 0.06, z), 0.012, black));
+    bike.add(tube(new Vector3(stemTop.x + 0.08, stemTop.y - 0.06, z), new Vector3(stemTop.x + 0.02, stemTop.y - 0.14, z), 0.012, black));
+  }
+  // Chainring, cranks and pedals.
+  const ring = new Mesh(new TorusGeometry(0.1, 0.008, 8, 32), chrome);
+  ring.position.set(bb.x, bb.y, 0.04);
+  ring.castShadow = true;
+  bike.add(ring);
+  bike.add(tube(new Vector3(bb.x, bb.y, 0.05), new Vector3(bb.x + 0.12, bb.y - 0.12, 0.05), 0.01, chrome));
+  bike.add(tube(new Vector3(bb.x, bb.y, -0.05), new Vector3(bb.x - 0.12, bb.y + 0.12, -0.05), 0.01, chrome));
+  for (const [x, y, z] of [
+    [bb.x + 0.12, bb.y - 0.12, 0.09],
+    [bb.x - 0.12, bb.y + 0.12, -0.09],
+  ]) {
+    const pedal = new Mesh(new BoxGeometry(0.09, 0.02, 0.07), black);
+    pedal.position.set(x, y, z);
+    pedal.castShadow = true;
+    bike.add(pedal);
+  }
+  // The chain, front ring to rear hub.
+  for (const dy of [-0.09, 0.09]) {
+    bike.add(tube(new Vector3(bb.x, bb.y + dy, 0.04), new Vector3(rear.x, rear.y + dy * 0.5, 0.04), 0.004, black));
+  }
+  return bike;
+}
+
 function createProductSet(): Group {
   const set = new Group();
-  // A pedestal with a glossy black top, and a perfume bottle on it.
-  const pedestal = block(0.05, 0.055, 0.05, mat('#e8e4dc', 0.6), 0, 0.0275, -0.06);
-  const top = block(0.052, 0.002, 0.052, mat('#0b0b0d', 0.08, 0.2), 0, 0.056, -0.06);
-  const glass = new MeshStandardMaterial({
-    color: '#c98a3a',
-    roughness: 0.04,
-    metalness: 0.1,
-    transparent: true,
-    opacity: 0.82,
-  });
-  const body = block(0.022, 0.03, 0.012, glass, 0, 0.072, -0.06);
-  const liquid = block(0.018, 0.022, 0.009, mat('#8a4a12', 0.2), 0, 0.069, -0.06);
-  const neck = cylinder(0.003, 0.003, 0.004, mat('#d4af37', 0.25, 1), 0, 0.089, -0.06);
-  const cap = block(0.012, 0.009, 0.009, mat('#d4af37', 0.2, 1), 0, 0.0955, -0.06);
-  const label = block(0.012, 0.008, 0.0004, mat('#f4f1ea', 0.5), 0, 0.072, -0.0538);
-  set.add(pedestal, top, liquid, body, neck, cap, label);
+  // A low turntable riser, and the sponsor's bike on it, side-on to camera.
+  const riser = cylinder(0.08, 0.082, 0.004, mat('#0b0b0d', 0.12, 0.2), 0, 0.002, -0.06, 48);
+  const bike = createBicycle();
+  bike.scale.setScalar(1 / 14);
+  bike.position.set(0, 0.004, -0.06);
+  set.add(riser, bike);
   // A seamless paper sweep behind it.
-  const sweep = block(0.3, 0.18, 0.004, mat('#2c2c33', 0.95), 0, 0.09, -0.17);
+  const sweep = block(0.36, 0.2, 0.004, mat('#2c2c33', 0.95), 0, 0.1, -0.17);
   set.add(sweep);
   return set;
 }

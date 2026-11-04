@@ -45,7 +45,7 @@ const { chromium } = require('playwright');
 
   // Round 4. Light switches on the iPad: HOUSE and each light, labeled; hover outlines the switch.
   // (Scene 1 is now the locked dimmer tutorial; these run on scene 2, the first you place lights in.)
-  await api(() => window.lightLab.loadLevelId('beta-2-key-dimmer'));
+  await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
   await wait(800);
   const buttons = await api(() => window.lightLab.lightButtons());
   check('iPad has a labeled switch for HOUSE and every light', buttons.map((b) => b.label).join(',') === 'HOUSE,Fresnel,Softbox,PAR can', buttons);
@@ -287,7 +287,7 @@ const { chromium } = require('playwright');
   check('Dee waits until the director has finished his line', arrived && !overlap, { arrived, overlap });
 
   // Round 10. The director's chair turns with him, and he wobbles while he talks.
-  await api(() => window.lightLab.loadLevelId('beta-2-key-dimmer'));
+  await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
   await wait(400);
   const wob = await api(() => window.lightLab.directorWobble());
   await api(() => window.lightLab.solve());
@@ -317,6 +317,57 @@ const { chromium } = require('playwright');
   await wait(400);
   const silkY = await api((i) => window.lightLab.fixtures()[i].local.y, silk);
   check('the silk stays above everyone\'s heads', silkY >= 0.17, { silkY });
+
+  // Round 11 (ben, 2026-11-03).
+  // Dee's notes for a scene are short and all fit on the phone at once; nothing but the win and gossip after a win.
+  for (const id of await api(() => window.lightLab.levelIds())) {
+    await api(() => window.lightLab.clearPhone());
+    await api((x) => window.lightLab.loadLevelId(x), id);
+    const lines = await api(() => window.lightLab.levelDee());
+    const sent = await api(() => window.lightLab.texts().length);
+    for (const line of lines) await api((t) => window.lightLab.dee(t), line);
+    await page
+      .waitForFunction(([n, last]) => window.lightLab.texts().slice(n).includes(`dee: ${last}`), [sent, lines[lines.length - 1]], { timeout: 120000 })
+      .catch(() => {});
+    await wait(1500);
+    const shown = await api(() => window.lightLab.phoneVisible());
+    check(`scene ${id}: all of Dee's notes fit on the phone together`, lines.every((l) => shown.includes(l)), { lines, shown });
+    check(`scene ${id}: Dee's notes don't give button instructions`, !lines.some((l) => /\b(tap|iPad|button|click|drag)\b/i.test(l)), lines);
+  }
+  await page.screenshot({ path: `${out}/16-dee-notes.png` });
+  await api(() => window.lightLab.clearPhone());
+  await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
+  const sentBefore = await api(() => window.lightLab.texts().length);
+  await api(() => window.lightLab.dee('a tip that should never arrive'));
+  await api(() => window.lightLab.solve());
+  await wait(14000);
+  const winTexts = (await api(() => window.lightLab.texts())).slice(sentBefore);
+  check('a win drops pending tips and sends no lesson after it', !winTexts.some((t) => /never arrive|place first/.test(t)), winTexts);
+  // The kicked light (scene 2) starts on the floor.
+  const ids11 = await api(() => window.lightLab.levelIds());
+  check('scene 2 is the kicked light, scene 3 places and dims a key and a back light', ids11[1] === 'interview' && ids11[2] === 'key-back-dimmer', ids11);
+  await api(() => window.lightLab.loadLevelId('interview'));
+  await wait(300);
+  const keyY = await api(() => window.lightLab.fixtures()[0].local.y);
+  check('the kicked light starts as low as a stand goes', keyY <= 0.045, { keyY });
+  // Scene 4 is a bicycle now.
+  await api(() => window.lightLab.loadLevelId('product'));
+  await wait(300);
+  check('the product is a bicycle', await api(() => window.lightLab.hasObject('bicycle')));
+  // The silk keeps its fabric off the set too.
+  await api(() => window.lightLab.loadLevelId('beta-3-desert'));
+  await wait(400);
+  check('the parked silk still has its fabric', (await api(() => window.lightLab.silkFabricVisible())) === true);
+  // The LED wall streams the other way.
+  await api(() => window.lightLab.loadLevelId('beta-4-car'));
+  await wait(400);
+  await api(() => window.lightLab.solve());
+  await wait(3500);
+  const off0 = await api(() => window.lightLab.ledOffset());
+  await api(() => window.lightLab.pressCard());
+  await wait(3500);
+  const off1 = await api(() => window.lightLab.ledOffset());
+  check('the LED wall scrolls the reversed direction on Roll', off1 > off0, { off0, off1 });
 
   console.log('errors', errors.length ? errors : 'none');
   const failed = Object.entries(results).filter(([, ok]) => !ok);

@@ -54,7 +54,7 @@ function visibleBox(object: Object3D, out: Box3): Box3 {
 }
 
 /** Stage-local box of an object's shown parts (the stage may be scaled and moved in the room). */
-function localBox(stage: Object3D, object: Object3D, out: Box3): Box3 {
+export function localBox(stage: Object3D, object: Object3D, out: Box3): Box3 {
   visibleBox(object, out);
   return out.applyMatrix4(stage.matrixWorld.clone().invert());
 }

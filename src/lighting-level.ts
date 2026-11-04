@@ -1,5 +1,6 @@
 import {
   AssetManager,
+  Box3,
   BoxGeometry,
   CanvasTexture,
   Color,
@@ -65,7 +66,7 @@ import {
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
 import * as sfx from './sfx.js';
-import { checkPlacement } from './placement-check.js';
+import { checkPlacement, localBox } from './placement-check.js';
 
 /**
  * Runs Lucky Break: ten lighting scenes on one tabletop soundstage, and the
@@ -409,7 +410,6 @@ export class LightingLevelSystem extends createSystem({
   private directorLooking = false;
   private directorBlend = 0;
   private pendingLine: { line: string; hold: boolean; wait: number } | null = null;
-  private phoneWheel = 0;
   /** The scene's own cast member hasn't loaded yet (the stand-in actor is sitting in). */
   private castPending = false;
   /** Seconds since the camera rolled on this scene's take, or -1 before it rolls. */
@@ -761,6 +761,18 @@ export class LightingLevelSystem extends createSystem({
           zoom: () => this.ipadZoom,
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
+          phoneVisible: () => this.phone.visibleTexts,
+          levelDee: () => this.level.dee,
+          ledOffset: () => {
+            const wall = this.set?.getObjectByName('led-wall') as Mesh | undefined;
+            return (wall?.material as MeshBasicMaterial | undefined)?.map?.offset.x ?? null;
+          },
+          silkFabricVisible: () => {
+            const silk = this.fixtures.find((f) => f.item.kind === 'silk');
+            const fabric = silk?.head.getObjectByName('fixture-face');
+            return fabric ? fabric.visible : null;
+          },
+          hasObject: (name: string) => !!this.set?.getObjectByName(name),
           phoneScrolledBack: () => this.phone.scrolledBack,
           dee: (text: string) => this.phone.text('dee', text),
           clearPhone: () => this.phone.clear(),
@@ -947,6 +959,17 @@ export class LightingLevelSystem extends createSystem({
     for (const preset of level.preset ?? []) {
       const fixture = this.fixtures[preset.kit];
       this.roleLocal({ id: 'preset', label: '', kinds: [], kindHint: '', orbit: preset }, fixture.local);
+      // A knocked-over light sits as low as a stand goes, its head resting just off the floor.
+      if (preset.onFloor) {
+        fixture.local.y = MIN_HEIGHT;
+        this.stage.updateMatrixWorld(true);
+        this.updateAim();
+        this.placeFixture(fixture);
+        this.updateFixture(fixture);
+        fixture.object.updateMatrixWorld(true);
+        const low = localBox(this.stage, fixture.head, new Box3()).min.y;
+        if (low < 0.002) fixture.local.y += 0.002 - low;
+      }
       fixture.on = true;
       if (preset.dimmer !== undefined) fixture.dimmer = preset.dimmer;
     }
@@ -1150,6 +1173,11 @@ export class LightingLevelSystem extends createSystem({
     };
   }
 
+  /** Dee's notes for this scene: why the lights go where they go. */
+  private textDee(): void {
+    for (const line of this.level.dee) this.phone.text('dee', line);
+  }
+
   /** Moves the story on: the title starts scene 1, a won scene goes to the next one. */
   private pressCard(): void {
     if (!this.ipad.hasButton) {
@@ -1162,10 +1190,10 @@ export class LightingLevelSystem extends createSystem({
         this.showBriefCard();
         if (this.levelIndex === 0) {
           this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
-          this.phone.text('dee', "ok don't panic. I'm in video village, I can see the monitor. I'll text you");
-          this.phone.text('dee', "that iPad in your hands is the video village feed. left = the shot the director wants, right = what the camera sees now. make them match");
+          this.phone.text('dee', "ok don't panic. I'm in video village, I'll coach you");
+          this.phone.text('dee', 'iPad: left = the shot the director wants, right = your camera. match them');
         }
-        this.phone.text('dee', this.level.tip);
+        this.textDee();
         break;
       case 'won':
         if (this.levelIndex === LEVELS.length - 1) {
@@ -1176,7 +1204,7 @@ export class LightingLevelSystem extends createSystem({
           this.startTake();
         } else if (this.takeTime >= TAKE_SECONDS) {
           this.loadLevel(this.levelIndex + 1);
-          this.phone.text('dee', this.level.tip);
+          this.textDee();
         }
         break;
       case 'rolled':
@@ -1344,8 +1372,8 @@ export class LightingLevelSystem extends createSystem({
       body: '',
       button: last ? 'Roll!' : 'Roll',
     });
-    // Dee explains what you just did, then the gossip.
-    this.phone.text('dee', this.level.lesson);
+    // Just the gossip: Dee taught the why at the start of the scene (ben, round 11:
+    // the lesson arrived after he'd won and rolled).
     if (this.level.after) {
       this.phone.text('dee', this.level.after);
     }
@@ -1392,7 +1420,7 @@ export class LightingLevelSystem extends createSystem({
       const wall = set.getObjectByName('led-wall') as Mesh | undefined;
       const map = (wall?.material as MeshBasicMaterial | undefined)?.map;
       // The car drives camera-left, so the world streams past to the right.
-      if (map) map.offset.x -= delta * 0.09;
+      if (map) map.offset.x += delta * 0.09;
       const car = set.getObjectByName('car');
       if (car) {
         car.position.y = 0.0006 * Math.sin(t * 17);
@@ -1820,10 +1848,12 @@ export class LightingLevelSystem extends createSystem({
     if (fixture.face) {
       const glow = fixture.item.dimmer ? 0.3 + 0.7 * fixture.dimmer : 1;
       if (kind === 'silk') {
-        // Rigged: the fabric is stretched on the frame (and shades the sun). Off: an empty frame.
+        // The fabric is always on the frame (ben, round 11: "the silk should have silk on
+        // it no matter where it is"). Rigged over the set, it glows with the sun it softens.
         fixture.face.emissiveIntensity = fixture.on ? 0.25 : 0;
+        // Parked off the set it doesn't shade anything (scoring counts it only once rigged).
         const fabric = fixture.head.getObjectByName('fixture-face');
-        if (fabric) fabric.visible = fixture.on;
+        if (fabric) fabric.castShadow = fixture.on;
       } else if (kind === 'bounce') {
         // Off, the card is turned to its black side; on, the white side catches the sun.
         fixture.face.color.set(fixture.on ? '#f4f1ea' : '#18181b');
@@ -2348,6 +2378,8 @@ export class LightingLevelSystem extends createSystem({
       this.phase = 'won';
       this.chime.play().catch(() => undefined);
       this.ipad.setStatus(score, '', true);
+      // Tips still on their way are moot now (ben, round 11: tips kept coming after the win).
+      this.phone.dropPending();
       this.phone.text('dee', this.pickDeeWin());
       this.showWinCard();
       for (const text of this.level.texts ?? []) {
@@ -2407,8 +2439,8 @@ export class LightingLevelSystem extends createSystem({
     if (this.hintSince > NUDGE_SECONDS && this.sinceNudge > NUDGE_SECONDS && hint !== this.lastNudge && !framed) {
       this.lastNudge = hint;
       this.sinceNudge = 0;
-      // Just the tip, in Dee's lowercase voice (ben, round 9: a "from here:" lead-in was confusing).
-      this.phone.text('dee', hint.charAt(0).toLowerCase() + hint.slice(1));
+      // Dee no longer repeats the iPad tip (ben, round 11: "he's just competing with the
+      // tip on the iPad"). The tip says what to do; Dee's notes say why.
     }
   }
 
@@ -2597,7 +2629,7 @@ export class LightingLevelSystem extends createSystem({
   /**
    * In the headset, pushing either controller's thumbstick up or down scrolls
    * Dee's chat (up = older texts), and brings a tucked phone up first
-   * (ben, round 6). Holding it repeats, a few messages a second.
+   * (ben, round 6). It scrolls smoothly, faster the further it's pushed.
    */
   private scrollPhoneWithThumbstick(delta: number): void {
     this.thumbstickWait = Math.max(0, this.thumbstickWait - delta);
@@ -2609,17 +2641,17 @@ export class LightingLevelSystem extends createSystem({
       // xr-standard: axes 2 and 3 are the thumbstick's x and y (y is negative when pushed up).
       if (axes && axes.length >= 4 && Math.abs(axes[3]) > Math.abs(y)) y = axes[3];
     }
-    if (Math.abs(y) < 0.6) {
+    if (Math.abs(y) < 0.3) {
       this.thumbstickWait = 0;
       return;
     }
-    if (this.thumbstickWait > 0) return;
-    this.thumbstickWait = 0.28;
     if (!this.phone.awake) {
+      if (this.thumbstickWait > 0) return;
+      this.thumbstickWait = 0.4;
       this.phone.wake();
       return;
     }
-    this.phone.scroll(y < 0 ? 1 : -1);
+    this.phone.scrollBy(-y * 900 * delta);
   }
 
   /** The light under the pointer (or being moved); its switch on the iPad gets outlined. */
@@ -2885,12 +2917,10 @@ export class LightingLevelSystem extends createSystem({
     // Scrolling over the phone scrolls Dee's chat back through older texts.
     this.setPointerRay(event.clientX, event.clientY);
     if (!this.dragged && this.raycaster.intersectObject(this.phone.mesh, false).length > 0) {
-      // Trackpads send many small steps: one message per ~80 pixels of scroll.
-      this.phoneWheel += event.deltaY;
-      while (Math.abs(this.phoneWheel) >= 80) {
-        this.phone.scroll(this.phoneWheel < 0 ? 1 : -1);
-        this.phoneWheel -= Math.sign(this.phoneWheel) * 80;
-      }
+      // By pixel, eased on the phone: a trackpad glides and a mouse wheel's page jumps
+      // still slide (ben, round 11). Line-mode wheels (Firefox) send lines, not pixels.
+      const px = event.deltaY * (event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 600 : 1.3);
+      this.phone.scrollBy(-px);
       return;
     }
     if (this.dragged && !this.level.locked) {

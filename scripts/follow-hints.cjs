@@ -59,7 +59,7 @@ const TRIALS = Number(process.env.TRIALS || 6);
             } while (ll.inFrame() && ++tries < 200);
             if (ll.inFrame()) throw new Error(`scene ${scene + 1}: can't knock light ${i} anywhere out of the shot (is its spot in frame?)`);
           }
-          const win = ids[scene] === 'beta-2-key-dimmer' ? 90 : 85;
+          const win = 85;
           let steps = 0;
           let reversals = 0;
           let switches = 0; // the tip changed direction (left-right / height / distance)
