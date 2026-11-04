@@ -1,3 +1,4 @@
+import { remixLevel } from './blind-remix.js';
 import type { FixtureKind } from './scene-assets/soundstage.scene-asset.js';
 
 /**
@@ -597,10 +598,14 @@ export const LEVELS: LevelDef[] = [
   scene('restaurant'),
 ];
 
-/** The scenes this visit plays: the beta track's four with ?track=beta in the address, otherwise the main playthrough. */
+/**
+ * The scenes this visit plays. ?track=beta is the blind track (ben, 2026-11-04): every
+ * scene of the main playthrough with the director's shot remixed (src/blind-remix.ts)
+ * and no match bar on the iPad. Otherwise the main playthrough.
+ */
 export const IS_BETA =
   typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('track') === 'beta';
-export const TRACK_LEVELS: LevelDef[] = IS_BETA ? BETA_LEVELS : LEVELS;
+export const TRACK_LEVELS: LevelDef[] = IS_BETA ? LEVELS.map(remixLevel) : LEVELS;
 
 /** What the director says when a take works. One is picked at random each time (never the same twice in a row). */
 export const DIRECTOR_WINS = [

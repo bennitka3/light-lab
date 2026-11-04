@@ -102,6 +102,11 @@ export class IPad {
   private shots: Mesh[] = [];
   page: IPadPage = { eyebrow: '', body: '' };
   private score = 0;
+  /**
+   * The blind track (?track=beta): no match bar, no score and no live tip, so the
+   * player matches the shots by eye. The game still scores behind the scenes.
+   */
+  blind = false;
   private hint = '';
   private won = false;
   /** The light switches along the row under the shots. */
@@ -346,7 +351,7 @@ export class IPad {
     ctx.fillText(label, pad, m(SHOT_TOP - 0.004));
     ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
     ctx.fillStyle = this.won ? '#4ade80' : '#ffffff';
-    ctx.fillText(`YOUR SHOT · MATCH ${this.score}%`, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
+    ctx.fillText(this.blind ? 'YOUR SHOT' : `YOUR SHOT · MATCH ${this.score}%`, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
     this.rects = [];
     // Size buttons in the top-right corner: make the iPad smaller or bigger.
     const sz = m(0.014);
@@ -382,7 +387,8 @@ export class IPad {
     ctx.fillStyle = '#2b2b30';
     ctx.fillRect(pad, barTop, barW, m(0.004));
     ctx.fillStyle = this.won ? '#4ade80' : this.score >= 70 ? '#f5d90a' : '#f97316';
-    ctx.fillRect(pad, barTop, (barW * this.score) / 100, m(0.004));
+    // Blind: the bar only fills (green) once the take is called.
+    if (!this.blind || this.won) ctx.fillRect(pad, barTop, (barW * this.score) / 100, m(0.004));
 
     this.drawLightRow(ctx, m, pad);
 
@@ -391,7 +397,7 @@ export class IPad {
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${m(0.0112)}px system-ui, sans-serif`;
     // A won take leaves the tip line empty: the director and Dee do the talking.
-    const headline = page.body || (this.won ? '' : this.hint);
+    const headline = page.body || (this.won ? '' : this.blind ? 'No bar today. Match the target by eye.' : this.hint);
     // Long tips shrink to fit on the one line rather than getting cut off.
     let tipSize = 0.0112;
     while (ctx.measureText(headline).width > textW && tipSize > 0.0084) {
@@ -460,7 +466,10 @@ export class IPad {
     if (this.lights.length === 0) return;
     const gap = m(0.004);
     const units = this.lights.reduce((sum, l) => sum + (l.kelvin !== undefined || l.dimmer !== undefined ? 2 : 1), 0);
-    const unit = (W - 2 * pad - gap * (this.lights.length - 1)) / units;
+    // A double-width switch (dial or dimmer) also spans one gap, so count those gaps too,
+    // or the last switch runs off the iPad's right edge (ben, round 11: the Fresnel in scene 1).
+    const dials = this.lights.filter((l) => l.kelvin !== undefined || l.dimmer !== undefined).length;
+    const unit = (W - 2 * pad - gap * (this.lights.length - 1 + dials)) / units;
     const top = m(ROW_TOP);
     const h = m(ROW_H);
     let x = pad;

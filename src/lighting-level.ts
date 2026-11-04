@@ -713,6 +713,13 @@ export class LightingLevelSystem extends createSystem({
             }
           },
           solve: () => this.solve(),
+          // Solves the scene as if its targets were these (by role order): tests play the main game's answer on the blind track.
+          solveAs: (roles: Partial<Role>[]) => {
+            const real = this.level;
+            this.level = { ...real, roles: real.roles.map((role, i) => ({ ...role, ...roles[i] })) };
+            this.solve();
+            this.level = real;
+          },
           practical: () => this.practical?.on,
           togglePractical: () => this.practical?.switch.toggle(),
           creature: () => this.creature.played,
@@ -739,6 +746,20 @@ export class LightingLevelSystem extends createSystem({
           dimmer: (i: number) => this.fixtures[i].dimmer,
           turnDimmer: (i: number, step: 1 | -1) => this.turnDimmer(this.fixtures[i], step),
           beta: () => IS_BETA,
+          // Blind track: the iPad shows no match bar or live tip.
+          blind: () => this.ipad.blind,
+          // The current scene's targets (where each role's light goes, and how bright).
+          roles: () => this.level.roles.map((r) => ({ id: r.id, orbit: r.orbit, pos: r.pos, level: r.level })),
+          // Roles whose target spot a player can't drag a light to (outside the set's bounds, or inside the cast).
+          unreachable: () =>
+            this.level.roles
+              .filter((role) => {
+                const want = this.roleLocal(role, new Vector3());
+                const got = want.clone();
+                this.clampToSet(got, role.kinds[0]);
+                return got.distanceTo(want) > 0.002;
+              })
+              .map((role) => role.id),
           // How many shader programs exist (a rise after a press means it compiled shaders).
           programs: () => this.world.renderer.info.programs?.length ?? -1,
           warmupDone: () => this.warmup < 0,
@@ -1337,7 +1358,7 @@ export class LightingLevelSystem extends createSystem({
             'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
           ],
       footer: IS_BETA && !this.xrStatus
-        ? 'BETA TRACK: three experimental scenes (dimmers, a desert silk, a car on an LED wall). The main game is unchanged.'
+        ? 'BETA TRACK: every scene, new shots, no match bar. Match it by eye. The main game is unchanged.'
         : headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
         : this.xrStatus
@@ -1358,7 +1379,7 @@ export class LightingLevelSystem extends createSystem({
     this.sayNext(level.objective);
   }
 
-  /** The callout over the target shot: "Scene 3 of 7", or on the beta track "Beta 2 of 3 · Desert at noon". */
+  /** The callout over the target shot: "Scene 3 of 10", or on the beta track "Beta 2/10 · Desert at noon". */
   private sceneLabel(): string {
     return IS_BETA
       ? `Beta ${this.levelIndex + 1}/${LEVELS.length} · ${this.level.title}`
@@ -1456,7 +1477,7 @@ export class LightingLevelSystem extends createSystem({
     this.renderTargetShot();
     this.ipad.setStatus(100, '', true);
     if (!this.greenScreen) {
-      // The beta track ends on the car commercial, not Lake Como.
+      // A track that doesn't end on Lake Como ends on the car commercial's lines.
       this.say('"Print it. That\'s the commercial."', true);
       this.sayNext('"And somebody get that dog an agent."', true);
       this.phone.text('dee', 'the client is crying. the DOG is trending 🐶');
@@ -1480,7 +1501,7 @@ export class LightingLevelSystem extends createSystem({
       eyebrow: "That's a wrap",
       title: 'LUCKY BREAK',
       body: IS_BETA
-        ? 'Beta track complete. Dimmers, an overhead silk, a bounce card and an LED volume: all yours.'
+        ? 'Blind track complete. Every scene, a new shot each time, no match bar: you lit it all by eye.'
         : 'Starring you, formerly Background Extra #47, now Gaffer. Dimmers, key, fill, back light, product, a desert silk, practicals, low-key, an LED volume, magic hour and green screen: all yours.',
       footer: 'A film by ben, lit by you, built by Claude.',
       button: 'Play again',
@@ -2472,6 +2493,7 @@ export class LightingLevelSystem extends createSystem({
 
   private buildMonitor(): void {
     this.ipad = new IPad(this.targetShot.texture, this.shotTarget.texture);
+    this.ipad.blind = IS_BETA;
     this.creature.install(this.ipad.liveMaterial);
     this.ipad.overLive = (ctx, x, y, w, h) => {
       if (!this.creature.active) return false;
