@@ -3,6 +3,21 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 11: 2026-11-03 (ben, main playthrough, desktop browser)
+
+| ben said | Status |
+|---|---|
+| "Dee's notes still are too long and don't stay on screen... the lines that are crucial for the level should be small enough you can see them on screen at the same time" | **Done.** Each scene now has two or three short Dee notes (`dee` in src/levels.ts), in a smaller font, and the test checks they all fit on the phone together. Only the opening story lines scroll off. The phone stays up at least 10 s after the last text, longer when more was said. |
+| "there is NOT smooth scroll on my browser, it just pages down or up" | **Done.** The chat scrolls by pixel and glides, so a mouse wheel's page jumps slide too. The headset thumbstick scrolls smoothly. |
+| "Dee is more your training guide... the tip says what to do, Dee says what a key light is" / "Dee doesn't need to double up on the tips" | **Done.** The iPad tip says what to do. Dee says why and where a real gaffer puts it, with no button instructions. Dee no longer repeats the iPad tip when you're stuck. The after-the-win lesson moved to the start of the scene. |
+| "the Place it first note showed up after i won and rolled the clip" / scene 5 "he kept giving tips" after the win | **Fixed.** A win drops any texts still on their way. After a win Dee only reacts and gossips. |
+| "the one where he says someone kicked a light... should start on the lowest point in the set on the ground. the lesson before that should be swapped with this one and should add... a backlight" | **Done.** Order: 1 tutorial (brightness only), 2 the kicked light (move lights; the key starts knocked down on the floor), 3 new "key and back" scene (place AND dim a key and a back light), then product onward. |
+| Scene 4: "the perfume bottle is MASSIVE... something that's naturally bigger, like a bicycle?" | **Done.** A procedural red road bike on a black turntable riser, side-on. Top softbox plus a strip light off to the side for the edge. |
+| Scene 5: "the silk should have silk on it no matter where it is" | **Fixed.** The fabric is always on the frame; it only shades the sun once rigged over the cast. |
+| Scene 6: "weird shading shows beneath characters" when rotating | **Fixed.** The crew's rubber floor mats sat exactly level with the floor, so the two surfaces flickered against each other in stair-step stripes. The mats now sit a hair above the floor. |
+| Scene 8: "the backdrop is moving the wrong direction when you hit roll" / remove "and you're in this business" | **Fixed** both. |
+| "I find myself just moving the light around until the bar goes up, and not actually looking" | **Not built yet** (ben's call). Proposal: the bar only updates when you let go of a light, so you aim by watching the monitor; a no-bar extreme mode later. Another thread is testing levels without the bar on the beta track. |
+
 ## Round 10: 2026-11-03 (ben, beta track, desktop browser)
 
 | ben said | Status |

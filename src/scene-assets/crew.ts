@@ -60,12 +60,17 @@ function boxAt(w: number, h: number, d: number, material: MeshStandardMaterial, 
   return mesh;
 }
 
-/** A rubber floor mat the crew member stands on, flush with the stage floor. */
+/**
+ * A thin rubber floor mat the crew member stands on. Its top sits just above the
+ * floor: flush with it, the two surfaces fought over the same pixels and drew
+ * dark stair-step "shadows" under the crew that flickered as the view turned
+ * (ben, round 11, scene 6).
+ */
 function floorMat(w: number, d: number): Mesh {
-  const mat = new Mesh(new BoxGeometry(w, 0.01, d), matMaterial);
+  const mat = new Mesh(new BoxGeometry(w, 0.0008, d), matMaterial);
   // Named so outdoor scenes can hide it: on sand it reads as a little platform.
   mat.name = 'crew-mat';
-  mat.position.y = -0.005;
+  mat.position.y = 0.0004;
   mat.receiveShadow = true;
   return mat;
 }

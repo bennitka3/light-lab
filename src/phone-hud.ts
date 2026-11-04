@@ -14,8 +14,14 @@ import { wrap } from './text.js';
 
 export const PHONE_WIDTH = 0.1;
 export const PHONE_HEIGHT = 0.18;
-/** How long the phone stays up after a text lands, and how long a banner shows. */
-const AWAKE_SECONDS = 7;
+/**
+ * How long the phone stays up after the last text lands, and how long a banner shows.
+ * ben, round 11: "the phone disappears" before he'd read Dee. It now stays up at
+ * least 10 seconds, plus time to read everything that arrived in this burst.
+ */
+const AWAKE_SECONDS = 10;
+const AWAKE_SECONDS_PER_WORD = 0.35;
+const AWAKE_MAX = 30;
 const BANNER_SECONDS = 5;
 const PX_W = 500;
 const PX_H = Math.round((PX_W * PHONE_HEIGHT) / PHONE_WIDTH);
@@ -31,6 +37,18 @@ const READ_MAX = 5;
 /** Where the scroll buttons sit on the phone canvas (top of each pill, pixels). */
 const EARLIER_Y = 168;
 const NEWEST_Y = PX_H - 92;
+/**
+ * Chat text size (canvas pixels). ben, round 11: at 40px only one or two texts fit, so
+ * a scene's notes pushed each other off. At 30px a scene's two or three notes fit together.
+ */
+const FONT_PX = 30;
+const LINE_H = 37;
+const BUBBLE_PAD = 26;
+const BUBBLE_GAP = 12;
+const CHAT_TOP = EARLIER_Y + 56;
+const CHAT_BOTTOM = PX_H - 50;
+/** How far one press of "earlier" scrolls (canvas pixels). */
+const EARLIER_STEP = 260;
 
 const CONTACTS: Record<Text['from'], { name: string; color: string }> = {
   dee: { name: 'Dee (video village)', color: '#a78bfa' },
@@ -55,8 +73,17 @@ export class PhoneHud {
   private slide = 0;
   /** The player tapped the phone to keep it up. */
   pinned = false;
-  /** How many of the newest messages are scrolled off the bottom (0 = showing the latest). */
-  private scrollBack = 0;
+  /**
+   * How far the chat is scrolled back, in canvas pixels (0 = showing the latest).
+   * Scrolling is by pixel and eased, so a mouse wheel that jumps a page at a time
+   * still glides (ben, round 11: "it just pages down or up").
+   */
+  private scrollTarget = 0;
+  private scrollPx = 0;
+  /** How far back the chat can scroll (content taller than the screen), from the last draw. */
+  private maxScroll = 0;
+  /** Words that arrived since the phone last went quiet: they decide how long it stays up. */
+  private burstWords = 0;
   /** Older messages are cut off above (so the "earlier" button shows). */
   private hiddenAbove = false;
   /** 1 right after a message lands, easing to 0; the system uses it to bounce the phone. */
@@ -65,6 +92,8 @@ export class PhoneHud {
   onArrive?: () => void;
   /** Every message shown so far, for tests. */
   readonly log: Text[] = [];
+  /** The texts fully on screen at the last draw, for tests. */
+  visibleTexts: string[] = [];
 
   constructor() {
     this.canvas.width = PX_W;
@@ -90,7 +119,9 @@ export class PhoneHud {
 
   clear(): void {
     this.messages = [];
-    this.scrollBack = 0;
+    this.scrollTarget = 0;
+    this.scrollPx = 0;
+    this.burstWords = 0;
     this.queue = [];
     this.typing = 0;
     this.banner = undefined;
@@ -102,14 +133,24 @@ export class PhoneHud {
     this.draw(this.typing > 0);
   }
 
-  /** Scrolls the chat: +1 shows one older message, -1 one newer. */
+  /** Scrolls the chat by a step: +1 is about two texts older, -1 newer. */
   scroll(step: number): void {
-    const next = Math.max(0, Math.min(this.messages.length - 1, this.scrollBack + step));
-    if (next === this.scrollBack || (step > 0 && !this.hiddenAbove)) return;
-    this.scrollBack = next;
+    this.scrollBy(step * EARLIER_STEP);
+  }
+
+  /** Scrolls the chat by canvas pixels (positive = back to older texts); it glides there. */
+  scrollBy(px: number): void {
+    const next = Math.max(0, Math.min(this.maxScroll, this.scrollTarget + px));
+    if (Math.abs(next - this.scrollTarget) < 0.5) return;
+    this.scrollTarget = next;
     // Reading back through the chat keeps the phone up.
     this.sinceLast = 0;
-    this.draw(this.typing > 0);
+  }
+
+  /** Drops Dee's texts that haven't arrived yet (a won scene doesn't need tips any more). */
+  dropPending(): void {
+    this.queue = this.queue.filter((t) => t.from !== 'dee');
+    this.typing = 0;
   }
 
   /** Brings the phone up for a few seconds (e.g. the player reached for its thumbstick). */
@@ -132,8 +173,8 @@ export class PhoneHud {
       this.togglePin();
     } else if (this.hiddenAbove && py > EARLIER_Y - 30 && py < EARLIER_Y + 50) {
       this.scroll(1);
-    } else if (this.scrollBack > 0 && py > NEWEST_Y - 30 && py < NEWEST_Y + 50) {
-      this.scroll(-this.scrollBack);
+    } else if (this.scrollTarget > 0 && py > NEWEST_Y - 30 && py < NEWEST_Y + 50) {
+      this.scrollBy(-this.scrollTarget);
     } else {
       this.togglePin();
     }
@@ -141,11 +182,16 @@ export class PhoneHud {
   }
 
   get scrolledBack(): number {
-    return this.scrollBack;
+    return Math.round(this.scrollTarget);
+  }
+
+  /** Seconds the phone stays up after the last text: longer when more was said. */
+  private get awakeSeconds(): number {
+    return Math.min(AWAKE_MAX, Math.max(AWAKE_SECONDS, this.burstWords * AWAKE_SECONDS_PER_WORD));
   }
 
   get awake(): boolean {
-    return this.pinned || this.typing > 0 || this.queue.length > 0 || this.banner !== undefined || this.sinceLast < AWAKE_SECONDS;
+    return this.pinned || this.typing > 0 || this.queue.length > 0 || this.banner !== undefined || this.sinceLast < this.awakeSeconds;
   }
 
   update(delta: number): void {
@@ -153,6 +199,12 @@ export class PhoneHud {
     this.sinceLast += delta;
     this.readFor = Math.max(0, this.readFor - delta);
     this.quietFor = Math.max(0, this.quietFor - delta);
+    if (!this.awake) this.burstWords = 0;
+    if (Math.abs(this.scrollTarget - this.scrollPx) > 0.5) {
+      this.scrollPx += (this.scrollTarget - this.scrollPx) * (1 - Math.exp(-delta * 14));
+      if (Math.abs(this.scrollTarget - this.scrollPx) <= 0.5) this.scrollPx = this.scrollTarget;
+      this.draw(this.typing > 0);
+    }
     if (this.slide > 0) {
       // The chat glides up instead of jumping when a text lands.
       this.slide = this.slide < 0.5 ? 0 : this.slide * Math.exp(-delta * 9);
@@ -193,12 +245,14 @@ export class PhoneHud {
       if (this.messages.length > 40) {
         this.messages.shift();
       }
-      this.scrollBack = 0;
+      this.scrollTarget = 0;
+      this.scrollPx = 0;
       this.typing = 0;
       this.pop = 1;
       this.onArrive?.();
       this.sinceLast = 0;
       const words = next.text.split(/\s+/).length;
+      this.burstWords += words;
       this.readFor = Math.min(READ_MAX, Math.max(READ_MIN, words * READ_SECONDS_PER_WORD));
       this.slide = this.bubbleHeight(next.text) + 14;
       this.draw(false);
@@ -209,8 +263,8 @@ export class PhoneHud {
   private bubbleHeight(text: string): number {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return 0;
-    ctx.font = '40px system-ui, sans-serif';
-    return wrap(ctx, text, PX_W - 70 - 44).length * 48 + 30;
+    ctx.font = `${FONT_PX}px system-ui, sans-serif`;
+    return wrap(ctx, text, PX_W - 70 - 44).length * LINE_H + BUBBLE_PAD + BUBBLE_GAP;
   }
 
   private draw(typing: boolean): void {
@@ -249,49 +303,59 @@ export class PhoneHud {
     ctx.font = '22px system-ui, sans-serif';
     ctx.fillText(this.pinned ? 'video village · tap to tuck away' : 'video village · tap to keep open', 106, 136);
 
-    // Bubbles, newest at the bottom; older ones scroll off the top.
+    // Bubbles, newest at the bottom; older ones scroll off the top. The chat scrolls by pixel.
     const maxBubble = PX_W - 70;
-    const lineH = 48;
-    const scrolled = this.scrollBack > 0;
-    const bottom = scrolled ? NEWEST_Y - 14 : PX_H - 50;
-    const top = EARLIER_Y + 56;
-    ctx.font = '40px system-ui, sans-serif';
+    const top = CHAT_TOP;
+    const bottom = CHAT_BOTTOM;
+    ctx.font = `${FONT_PX}px system-ui, sans-serif`;
+    const layout = this.messages.map((message) => {
+      const lines = wrap(ctx, message.text, maxBubble - 44);
+      const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 44);
+      return { lines, width, height: lines.length * LINE_H + BUBBLE_PAD };
+    });
+    const typingH = typing ? 50 + BUBBLE_GAP : 0;
+    const content = layout.reduce((sum, b) => sum + b.height + BUBBLE_GAP, 0) + typingH;
+    this.maxScroll = Math.max(0, content - (bottom - top));
+    this.scrollTarget = Math.min(this.scrollTarget, this.maxScroll);
+    this.scrollPx = Math.min(this.scrollPx, this.maxScroll);
+    const scrolled = this.scrollTarget > 1;
     // While sliding, everything sits a little lower and the newest text rises in from
     // the bottom edge; the chat area clips it.
-    let y = bottom + (scrolled ? 0 : this.slide);
+    let y = bottom + this.scrollPx + (scrolled ? 0 : this.slide);
     ctx.save();
     ctx.beginPath();
     ctx.rect(14, top - 8, PX_W - 28, PX_H - 40 - (top - 8));
     ctx.clip();
-    if (typing && !scrolled) {
+    if (typing) {
       // The "..." typing bubble.
-      roundRect(ctx, 34, y - 58, 110, 58, 29);
+      roundRect(ctx, 34, y - 50, 100, 50, 25);
       ctx.fillStyle = '#2c2c2e';
       ctx.fill();
       ctx.fillStyle = '#9a9aa0';
       for (let i = 0; i < 3; i++) {
         ctx.beginPath();
-        ctx.arc(62 + i * 27, y - 29, 7, 0, Math.PI * 2);
+        ctx.arc(60 + i * 24, y - 25, 6, 0, Math.PI * 2);
         ctx.fill();
       }
-      y -= 58 + 18;
+      y -= typingH;
     }
     this.hiddenAbove = false;
-    for (let i = this.messages.length - 1 - this.scrollBack; i >= 0; i--) {
-      const message = this.messages[i];
-      const lines = wrap(ctx, message.text, maxBubble - 44);
-      const width = Math.min(maxBubble, Math.max(...lines.map((line) => ctx.measureText(line).width)) + 44);
-      const height = lines.length * lineH + 30;
-      if (y - height < top) {
+    this.visibleTexts = [];
+    for (let i = layout.length - 1; i >= 0; i--) {
+      const { lines, width, height } = layout[i];
+      if (y - height < top - 2) {
         this.hiddenAbove = true;
-        break;
       }
-      roundRect(ctx, 34, y - height, width, height, 26);
-      ctx.fillStyle = '#2c2c2e';
-      ctx.fill();
-      ctx.fillStyle = '#f4f4f5';
-      lines.forEach((line, j) => ctx.fillText(line, 56, y - height + 52 + j * lineH));
-      y -= height + 14;
+      if (y < top - 8) break;
+      if (y - height >= top - 2 && y <= bottom + 2) this.visibleTexts.push(this.messages[i].text);
+      if (y - height <= bottom + 8) {
+        roundRect(ctx, 34, y - height, width, height, 22);
+        ctx.fillStyle = '#2c2c2e';
+        ctx.fill();
+        ctx.fillStyle = '#f4f4f5';
+        lines.forEach((line, j) => ctx.fillText(line, 56, y - height + BUBBLE_PAD / 2 + FONT_PX - 2 + j * LINE_H));
+      }
+      y -= height + BUBBLE_GAP;
     }
     ctx.restore();
     // Scroll buttons: older texts above, and a way back to the newest.
