@@ -385,10 +385,10 @@ export class IPad {
     const barTop = m(SHOT_TOP + SHOT_H + 0.004);
     const barW = W - 2 * pad;
     ctx.fillStyle = '#2b2b30';
-    ctx.fillRect(pad, barTop, barW, m(0.004));
+    if (!this.blind) ctx.fillRect(pad, barTop, barW, m(0.004));
     ctx.fillStyle = this.won ? '#4ade80' : this.score >= 70 ? '#f5d90a' : '#f97316';
-    // Blind: the bar only fills (green) once the take is called.
-    if (!this.blind || this.won) ctx.fillRect(pad, barTop, (barW * this.score) / 100, m(0.004));
+    // Blind: no bar at all, not even on the win (ben, 2026-11-09: it read as a score).
+    if (!this.blind) ctx.fillRect(pad, barTop, (barW * this.score) / 100, m(0.004));
 
     this.drawLightRow(ctx, m, pad);
 
