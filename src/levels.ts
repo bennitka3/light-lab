@@ -603,9 +603,19 @@ export const LEVELS: LevelDef[] = [
  * scene of the main playthrough with the director's shot remixed (src/blind-remix.ts)
  * and no match bar on the iPad. Otherwise the main playthrough.
  */
-export const IS_BETA =
-  typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('track') === 'beta';
-export const TRACK_LEVELS: LevelDef[] = IS_BETA ? LEVELS.map(remixLevel) : LEVELS;
+const TRACK = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('track') : null;
+/**
+ * ?track=result (ben, 2026-11-09: "this does have to be winnable by the result not by
+ * light positions"): one scene, the blind scene 3 (key + back light), judged only by how
+ * the shot looks. No bar, no overlay. See LightingLevel.evaluateResult().
+ */
+export const IS_RESULT = TRACK === 'result';
+export const IS_BETA = TRACK === 'beta' || IS_RESULT;
+export const TRACK_LEVELS: LevelDef[] = IS_RESULT
+  ? [remixLevel(scene('key-back-dimmer'))]
+  : IS_BETA
+  ? LEVELS.map(remixLevel)
+  : LEVELS;
 
 /** What the director says when a take works. One is picked at random each time (never the same twice in a row). */
 export const DIRECTOR_WINS = [
