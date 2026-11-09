@@ -39,7 +39,7 @@ import {
 import { CreatureFeature } from './creature-feature.js';
 import { OPERATOR_ASSET, attachCameraOperator } from './camera-operator.js';
 import { LightingStage, StageLight } from './lighting-components.js';
-import { DEE_WINS, DIRECTOR_WINS, IS_BETA, type KitItem, type LevelDef, type Role, TRACK_LEVELS as LEVELS } from './levels.js';
+import { DEE_WINS, DIRECTOR_WINS, IS_BETA, IS_RESULT, type KitItem, type LevelDef, type Role, TRACK_LEVELS as LEVELS } from './levels.js';
 import { PHONE_HEIGHT, PHONE_WIDTH, PhoneHud } from './phone-hud.js';
 import { createLevelSet, disposeSet, paintLakeComo } from './scene-assets/level-sets.js';
 import { fitCarModel } from './scene-assets/beta-sets.js';
@@ -91,6 +91,13 @@ import { checkPlacement, localBox } from './placement-check.js';
 
 const SHOT_W = 512;
 const SHOT_H = 288;
+/** Result track: half a head's width in stage meters (1:14 scale), for placing the face zones. */
+const HEAD_HALF_WIDTH = 0.0075;
+type ResultReading = { left: number; right: number; rim: number };
+const SRGB_TO_LINEAR = Array.from({ length: 256 }, (_, i) => {
+  const c = i / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+});
 const WIN_HOLD_SECONDS = 0.8;
 // Where a light's head may go, in stage-local meters.
 const BOUNDS_X = STAGE_WIDTH / 2 - 0.02;
@@ -346,6 +353,11 @@ export class LightingLevelSystem extends createSystem({
   private fixtures: Fixture[] = [];
   private targetSpots: SpotLight[] = [];
   private aimLocal = new Vector3();
+  /** Result track: brightness of the shot's lighting jobs, measured from the pictures (target once, live a few times a second). */
+  private resultTarget?: ResultReading;
+  private resultLive?: ResultReading;
+  private resultTimer = 0;
+  private resultPixels = new Uint8Array(SHOT_W * SHOT_H * 4);
   private aimWorld = new Vector3();
   private screenWorld = new Vector3();
   private practical?: { on: boolean; shade: MeshStandardMaterial; bulb: PointLight; switch: Switch };
@@ -584,12 +596,19 @@ export class LightingLevelSystem extends createSystem({
       if (this.framesSinceLoad % 90 === 3 || this.retakeTarget) {
         this.retakeTarget = false;
         this.renderTargetShot();
+        if (IS_RESULT) this.resultTarget = this.readResult(this.targetShot);
       }
       // The monitor's live picture is a second full render of the set. In the
       // headset that doubles a frame's cost, so refresh it every third frame
       // there (24 fps on a 72 Hz Quest is plenty for a monitor).
       if (!this.immersive || this.framesSinceLoad % 3 === 0) {
         this.renderShot(this.shotTarget, true);
+      }
+      // Result track: read the live picture a few times a second (a pixel read stalls the GPU).
+      this.resultTimer += delta;
+      if (IS_RESULT && this.resultTimer > 0.25) {
+        this.resultTimer = 0;
+        this.resultLive = this.readResult(this.shotTarget);
       }
       if (this.warmup >= 0 && this.framesSinceLoad > 2) this.warmupStep();
       if (this.castPending && this.framesSinceLoad % 20 === 0) this.seatCastMember();
@@ -746,6 +765,7 @@ export class LightingLevelSystem extends createSystem({
           dimmer: (i: number) => this.fixtures[i].dimmer,
           turnDimmer: (i: number, step: 1 | -1) => this.turnDimmer(this.fixtures[i], step),
           beta: () => IS_BETA,
+          result: () => (IS_RESULT ? { zones: this.resultZones(), target: this.resultTarget, live: this.resultLive } : null),
           // Blind track: the iPad shows no match bar or live tip.
           blind: () => this.ipad.blind,
           // The current scene's targets (where each role's light goes, and how bright).
@@ -1357,7 +1377,9 @@ export class LightingLevelSystem extends createSystem({
             'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
             'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
           ],
-      footer: IS_BETA && !this.xrStatus
+      footer: IS_RESULT && !this.xrStatus
+        ? 'RESULT BETA: one scene, judged only by how your shot looks. Any lights, anywhere. No bar.'
+        : IS_BETA && !this.xrStatus
         ? 'BETA TRACK: every scene, new shots, no match bar. Match it by eye. The main game is unchanged.'
         : headset
         ? 'Seven scenes. One soundstage. Zero qualifications.'
@@ -1476,6 +1498,12 @@ export class LightingLevelSystem extends createSystem({
     }
     this.renderTargetShot();
     this.ipad.setStatus(100, '', true);
+    if (!this.greenScreen && IS_RESULT) {
+      this.say('"Print it. That\'s the one."', true);
+      this.phone.text('dee', 'you matched it by LOOKING at it. that\'s literally the job');
+      this.showPage({ eyebrow: 'Rolling', body: '', button: 'Take a bow' });
+      return;
+    }
     if (!this.greenScreen) {
       // A track that doesn't end on Lake Como ends on the car commercial's lines.
       this.say('"Print it. That\'s the commercial."', true);
@@ -1500,7 +1528,9 @@ export class LightingLevelSystem extends createSystem({
       full: true,
       eyebrow: "That's a wrap",
       title: 'LUCKY BREAK',
-      body: IS_BETA
+      body: IS_RESULT
+        ? 'Result beta complete. Judged by the picture, not by where the lights stood.'
+        : IS_BETA
         ? 'Blind track complete. Every scene, a new shot each time, no match bar: you lit it all by eye.'
         : 'Starring you, formerly Background Extra #47, now Gaffer. Dimmers, key, fill, back light, product, a desert silk, practicals, low-key, an LED volume, magic hour and green screen: all yours.',
       footer: 'A film by ben, lit by you, built by Claude.',
@@ -2043,8 +2073,75 @@ export class LightingLevelSystem extends createSystem({
     return -((dAz / 25) ** 2) - (dEl / 20) ** 2 - (dDist / 0.35) ** 2;
   }
 
+  /**
+   * Where the lighting jobs sit in the shot, in picture pixels (y down): the two halves of
+   * the face (one is the key side, the other the shadow side) and the top of the head (the
+   * back light's rim). Projected from the head's position, so it follows the actor.
+   */
+  private resultZones(): { left: number[]; right: number[]; rim: number[] } {
+    const v = this.v1;
+    const px = (x: number, y: number) => {
+      v.set(this.aimLocal.x + x, this.aimLocal.y + y, this.aimLocal.z);
+      this.stage.localToWorld(v);
+      v.project(this.shotCamera);
+      return [((v.x + 1) / 2) * SHOT_W, ((1 - v.y) / 2) * SHOT_H];
+    };
+    const [cx, cy] = px(0, 0);
+    const hw = Math.abs(px(HEAD_HALF_WIDTH, 0)[0] - cx);
+    const hh = Math.abs(px(0, HEAD_HALF_WIDTH)[1] - cy);
+    return {
+      left: [cx - 0.85 * hw, cy - 0.55 * hh, cx - 0.1 * hw, cy + 0.95 * hh],
+      right: [cx + 0.1 * hw, cy - 0.55 * hh, cx + 0.85 * hw, cy + 0.95 * hh],
+      rim: [cx - 0.8 * hw, cy - 1.3 * hh, cx + 0.8 * hw, cy - 0.85 * hh],
+    };
+  }
+
+  /** Mean linear brightness of each job's zone in a rendered shot. */
+  private readResult(rt: WebGLRenderTarget): ResultReading {
+    this.world.renderer.readRenderTargetPixels(rt, 0, 0, SHOT_W, SHOT_H, this.resultPixels);
+    const zones = this.resultZones();
+    const mean = ([x0, y0, x1, y1]: number[]): number => {
+      let sum = 0;
+      let n = 0;
+      for (let y = Math.max(0, Math.round(y0)); y < Math.min(SHOT_H, Math.round(y1)); y++) {
+        const row = (SHOT_H - 1 - y) * SHOT_W; // the read comes back bottom row first
+        for (let x = Math.max(0, Math.round(x0)); x < Math.min(SHOT_W, Math.round(x1)); x++) {
+          const i = (row + x) * 4;
+          sum += 0.2126 * SRGB_TO_LINEAR[this.resultPixels[i]] + 0.7152 * SRGB_TO_LINEAR[this.resultPixels[i + 1]] + 0.0722 * SRGB_TO_LINEAR[this.resultPixels[i + 2]];
+          n++;
+        }
+      }
+      return Math.max(sum / Math.max(n, 1), 1e-4);
+    };
+    return { left: mean(zones.left), right: mean(zones.right), rim: mean(zones.rim) };
+  }
+
+  /**
+   * The result track's win check (ben, 2026-11-09): compare how the two pictures look,
+   * only where this shot's lights do their jobs. Key = the brighter side of his face in
+   * the target; contrast = key side against shadow side; back light = the rim on his hair.
+   * Each must be within a third of a stop of the target (that scores 85, the win line),
+   * whichever lights did it and wherever they stand.
+   */
+  private evaluateResult(): { score: number; hint: string; fixture?: Fixture } {
+    const t = this.resultTarget;
+    const l = this.resultLive;
+    if (!t || !l) return { score: 0, hint: '' };
+    const keyRight = t.right >= t.left;
+    const tKey = keyRight ? t.right : t.left;
+    const tShadow = keyRight ? t.left : t.right;
+    const lKey = keyRight ? l.right : l.left;
+    const lShadow = keyRight ? l.left : l.right;
+    const errs = [Math.log2(lKey / tKey), Math.log2(lKey / lShadow / (tKey / tShadow)), Math.log2(l.rim / t.rim)];
+    const worst = Math.max(...errs.map(Math.abs));
+    let score = Math.round(MathUtils.clamp(100 - 45 * worst, 0, 100));
+    if (this.framedFixture()) score = Math.min(score, 40);
+    return { score, hint: '' };
+  }
+
   /** Matches switched-on lights to the scene's roles and scores the setup, with one hint. */
   private evaluate(): { score: number; hint: string; fixture?: Fixture } {
+    if (IS_RESULT) return this.evaluateResult();
     const level = this.level;
     const on = this.fixtures.filter((f) => f.on);
     // Best assignment of switched-on lights to roles, so two lights of the same
