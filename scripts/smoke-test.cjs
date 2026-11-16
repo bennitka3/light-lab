@@ -51,11 +51,12 @@ const { chromium } = require('playwright');
   await click(await at('brighter:1'));
   results.dimmerArrowWorks = (await api(() => window.lightLab.dimmer(0))) > d0;
   await api(() => window.lightLab.solve());
-  await page.waitForTimeout(3500);
+  await page.waitForFunction(() => window.lightLab.level().phase === 'won', null, { timeout: 15000 }).catch(() => {});
   results.wins = (await api(() => window.lightLab.level())).phase === 'won';
+  // No Roll button: the director rolls by himself a few seconds after the match, then Cut and Next scene.
+  results.noRollButton = !(await api(() => window.lightLab.card())).button && (await api(() => window.lightLab.take())) < 0;
   await page.screenshot({ path: `${out}/smoke-won.png` });
-  // Roll: the take plays, then Cut and Next scene.
-  await click(await at('card-button'));
+  await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 });
   await page.waitForTimeout(800);
   results.rollStartsTake = (await api(() => window.lightLab.take())) > 0;
   await api(() => window.lightLab.finishTake());

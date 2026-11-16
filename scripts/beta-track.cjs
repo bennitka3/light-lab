@@ -26,7 +26,7 @@ const { chromium } = require('playwright');
   page.on('console', (m) => m.type() === 'error' && errors.push('console: ' + m.text()));
   const ll = (fn, arg) => page.evaluate(([f, a]) => window.lightLab[f](...(a ?? [])), [fn, arg]);
   const nextScene = async () => {
-    await ll('pressCard'); // Roll
+    await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 }); // the director rolls by himself
     await page.waitForTimeout(800);
     await ll('finishTake');
     await page.waitForTimeout(400);
@@ -117,7 +117,7 @@ const { chromium } = require('playwright');
     await page.screenshot({ path: `${out}/blind-${String(n + 1).padStart(2, '0')}-${id}-won.png` });
     if (n < ids.length - 1) await nextScene();
     else {
-      await ll('pressCard'); // Roll
+      await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 }); // the director rolls by himself
       await page.waitForTimeout(800);
       await ll('finishTake');
       await page.waitForTimeout(400);

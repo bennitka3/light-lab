@@ -111,6 +111,25 @@ const SILK_MIN_HEIGHT = 0.17;
 const TAKE_SECONDS = 5.5;
 /** When the action starts in a take (after the director calls it). */
 const ACTION_AT = 1.3;
+/**
+ * How long after a match the director calls "Roll camera... ACTION!" on his own (ben,
+ * 2026-11-16: no Roll button). He turns to you, says his line, then rolls.
+ */
+const ROLL_DELAY = 3;
+/** How far (stage meters, 2 cm in the hand) a held light may drift after the match before it counts as moved. */
+const ROLL_MOVE_SLACK = 0.02;
+/** A blown take (you touched something while they rolled): when the actor blows up, and when it resets. */
+const BLOWN_TANTRUM_AT = 1.8;
+const BLOWN_RESET_AT = 4.6;
+/** Touching the set before "Action!" only gets a warning: when it resets. */
+const BLOWN_WARNING_RESET_AT = 2.6;
+/** The actor's blow-up when a take is ruined (one at random). */
+const TANTRUMS = [
+  '"I can\'t WORK like this! Amateurs!"',
+  '"I was IN it! I was in the moment!"',
+  '"Is the light guy even a real gaffer?!"',
+  '"Twelve years of training, and the LIGHTS are moving?!"',
+];
 // Keeps lights from being pushed through the cast.
 const SUBJECT_CLEARANCE = 0.03;
 // A grab or click shorter than this, that barely moves the light, is a tap on its switch.
@@ -249,6 +268,8 @@ type Fixture = {
   /** Headset grab bookkeeping for telling a tap from a move. */
   grabTime: number;
   grabStart: Vector3;
+  /** Where the light stood when the shot matched (moving it from there ruins the take). */
+  rollFrom: Vector3;
 };
 
 /** Something the player switches by pressing it: the HOUSE switch, a practical lamp. */
@@ -434,6 +455,18 @@ export class LightingLevelSystem extends createSystem({
   /** The car commercial's real SUV model hasn't replaced the stand-in yet. */
   private carPending = false;
   private retakeTarget = false;
+  /** Seconds until the director rolls on a matched shot by himself, or -1. */
+  private rollIn = -1;
+  /** Seconds since a take was blown (someone touched the set while rolling), or -1. */
+  private blownTime = -1;
+  /** The blown take happened mid-take (Cut, the actor blows up) rather than just before "Action!". */
+  private blownRolling = false;
+  /** This scene was matched before (the gossip and Dee's win text only come the first time). */
+  private wonOnce = false;
+  private lastTantrum = -1;
+  /** A second bubble, over the cast, for the actor's blow-up. */
+  private castBubble = new SpeechBubble();
+  private castBubbleAt = new Vector3();
   /** The camera operator's model hasn't loaded yet (he joins the camera rig once it has). */
   private operatorPending = true;
   // House lights: has the player cut them this scene (then leaving them on is on purpose),
@@ -560,6 +593,7 @@ export class LightingLevelSystem extends createSystem({
       this.ipadEntity?.dispose();
       this.phoneEntity?.dispose();
       this.bubble.mesh.removeFromParent();
+      this.castBubble.mesh.removeFromParent();
       this.director?.placeholder?.removeFromParent();
       this.shotTarget?.dispose();
       this.targetShot?.dispose();
@@ -615,7 +649,9 @@ export class LightingLevelSystem extends createSystem({
       if (this.carPending && this.framesSinceLoad % 20 === 5) this.swapInCar();
       if (this.operatorPending && this.framesSinceLoad % 20 === 10) this.placeOperator();
       this.creature.update(delta);
+      this.updateRoll(delta);
       this.updateTake(delta);
+      this.updateBlown(delta);
       this.updateScore(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
@@ -745,6 +781,10 @@ export class LightingLevelSystem extends createSystem({
           texts: () => this.phone.log.map((t) => `${t.from}: ${t.text}`),
           card: () => this.ipad.page,
           bubble: () => (this.bubble.mesh.visible ? this.bubble.line : null),
+          // The actor's line during a blown take, or null.
+          castBubble: () => (this.castBubble.mesh.visible ? this.castBubble.line : null),
+          // Seconds until the director rolls by himself on a match (-1 when he isn't about to).
+          rollIn: () => this.rollIn,
           phoneAwake: () => this.phone.awake,
           sounds: () => ({ ...sfx.played }),
           inXR: () => Boolean(this.world.renderer.xr.getSession()),
@@ -891,6 +931,10 @@ export class LightingLevelSystem extends createSystem({
     const level = this.level;
     this.phase = 'playing';
     this.takeTime = -1;
+    this.rollIn = -1;
+    this.blownTime = -1;
+    this.wonOnce = false;
+    this.castBubble.hide();
     this.directorLooking = false;
     this.houseOn = this.level.houseStartsOn ?? true;
     this.houseEverOff = !this.houseOn;
@@ -985,6 +1029,7 @@ export class LightingLevelSystem extends createSystem({
         switch: this.createSwitch(this.v1, 0.04, () => {
           practical.on = !practical.on;
           this.resetHold();
+          this.touchedSet();
         }),
       };
       this.practical = practical;
@@ -1211,6 +1256,7 @@ export class LightingLevelSystem extends createSystem({
       dimmer: 1,
       grabTime: 0,
       grabStart: new Vector3(),
+      rollFrom: new Vector3(),
     };
   }
 
@@ -1237,13 +1283,8 @@ export class LightingLevelSystem extends createSystem({
         this.textDee();
         break;
       case 'won':
-        if (this.levelIndex === LEVELS.length - 1) {
-          this.rollFinale();
-          this.takeTime = 0;
-        } else if (this.takeTime < 0) {
-          // Every scene gets its take: Roll, a few seconds of action, Cut (ben, round 10).
-          this.startTake();
-        } else if (this.takeTime >= TAKE_SECONDS) {
+        // The take rolls by itself on a match (updateRoll); the button only appears after Cut.
+        if (this.takeTime >= TAKE_SECONDS) {
           this.loadLevel(this.levelIndex + 1);
           this.textDee();
         }
@@ -1366,13 +1407,13 @@ export class LightingLevelSystem extends createSystem({
       body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       steps: headset
         ? [
-            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
+            'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
             'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
             'Pinch and hold a light to move it. Switch one on to see which it is.',
             'The director talks from the set. Dee texts you tips: tap the phone to keep it up.',
           ]
         : [
-            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
+            'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
             'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
             'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
             'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
@@ -1408,19 +1449,112 @@ export class LightingLevelSystem extends createSystem({
       : `Scene ${this.levelIndex + 1} of ${LEVELS.length}`;
   }
 
-  private showWinCard(): void {
+  private showWinCard(retry: boolean): void {
     const last = this.levelIndex === LEVELS.length - 1;
-    this.showPage({
-      eyebrow: this.sceneLabel(),
-      body: '',
-      button: last ? 'Roll!' : 'Roll',
-    });
+    // No Roll button (ben, 2026-11-16): the director rolls by himself a few seconds after a match.
+    this.showPage({ eyebrow: this.sceneLabel(), body: '' });
     // Just the gossip: Dee taught the why at the start of the scene (ben, round 11:
     // the lesson arrived after he'd won and rolled).
-    if (this.level.after) {
+    if (this.level.after && !retry) {
       this.phone.text('dee', this.level.after);
     }
-    this.sayToYou(last ? '"Okay. Okay. Everybody quiet. Roll it."' : (this.level.directorWin ?? this.pickDirectorLine()), true);
+    const line = last
+      ? '"Okay. Okay. Everybody quiet. Roll it."'
+      : retry
+      ? '"That\'s it. Nobody touch a thing."'
+      : (this.level.directorWin ?? this.pickDirectorLine());
+    this.sayToYou(line, true);
+    this.rollIn = ROLL_DELAY;
+  }
+
+  /** Counts down to the director rolling on a matched shot. */
+  private updateRoll(delta: number): void {
+    if (this.rollIn < 0 || this.phase !== 'won') return;
+    this.rollIn -= delta;
+    if (this.rollIn > 0) return;
+    this.rollIn = -1;
+    if (this.levelIndex === LEVELS.length - 1) {
+      this.rollFinale();
+      this.takeTime = 0;
+    } else {
+      // Every scene gets its take: action, a few seconds of acting, Cut (ben, round 10).
+      this.startTake();
+    }
+  }
+
+  /**
+   * The player touched the set (moved a light, flipped a switch, turned a dial). Between the
+   * match and "Cut!" that ruins the take (ben, 2026-11-16): the crew act it out and the scene
+   * goes back to playing, so matching it again rolls again.
+   */
+  private touchedSet(): void {
+    if (this.phase !== 'won' || this.takeTime >= TAKE_SECONDS) return;
+    const rolling = this.takeTime >= ACTION_AT;
+    devLog(`take blown (${rolling ? 'while rolling' : 'before action'})`);
+    this.phase = 'playing';
+    this.rollIn = -1;
+    this.takeTime = -1;
+    this.holdTime = 0;
+    this.blownTime = 0;
+    this.blownRolling = rolling;
+    this.shownText = '';
+    // Everyone stops acting.
+    for (const person of this.actor?.visible ? [this.actor, ...this.extraActors] : this.extraActors) {
+      person.rotation.z = 0;
+      person.rotation.x = 0;
+    }
+    this.directorLooking = true;
+    this.showPage({ eyebrow: this.sceneLabel(), body: '' });
+    if (rolling) {
+      this.say('"CUT! CUT! Who touched that light?!"', true);
+      this.phone.text('dee', "😬 they SAW that. once they roll, don't touch anything till Cut");
+    } else {
+      this.say('"Whoa, hands off! I was about to call action."', true);
+    }
+  }
+
+  /** Plays out a blown take: the actor's blow-up, then the director resets for another go. */
+  private updateBlown(delta: number): void {
+    if (this.blownTime < 0) return;
+    const before = this.blownTime;
+    this.blownTime += delta;
+    const t = this.blownTime;
+    const cast = this.actor?.visible ? [this.actor, ...this.extraActors] : this.extraActors;
+    if (this.blownRolling && before < BLOWN_TANTRUM_AT && t >= BLOWN_TANTRUM_AT) {
+      if (cast.length) {
+        let i = Math.floor(Math.random() * TANTRUMS.length);
+        if (i === this.lastTantrum) i = (i + 1) % TANTRUMS.length;
+        this.lastTantrum = i;
+        // Over the first cast member's head.
+        const box = new Box3().setFromObject(cast[0]);
+        box.getCenter(this.castBubbleAt);
+        this.castBubbleAt.y = box.max.y + BUBBLE_HEIGHT / 2 + 0.01;
+        this.castBubble.say('Actor', TANTRUMS[i]);
+      } else {
+        this.sayNext('"Amateur hour over here."', true);
+      }
+    }
+    // The actor throws a fit while the line is up.
+    if (this.blownRolling && cast.length && this.castBubble.speaking) {
+      const k = t - BLOWN_TANTRUM_AT;
+      cast[0].rotation.z = 0.09 * Math.sin(k * 13);
+      cast[0].rotation.x = 0.05 * Math.sin(k * 17 + 1);
+    } else if (this.blownRolling && cast.length) {
+      cast[0].rotation.z = 0;
+      cast[0].rotation.x = 0;
+    }
+    const reset = this.blownRolling ? BLOWN_RESET_AT : BLOWN_WARNING_RESET_AT;
+    if (before < reset && t >= reset) {
+      this.directorLooking = false;
+      this.say(this.blownRolling ? '"Back to one, people. Match the shot and we roll again."' : '"Match the shot again and we roll."');
+    }
+    if (t >= reset && !this.castBubble.speaking) {
+      this.blownTime = -1;
+      if (cast.length) {
+        cast[0].rotation.z = 0;
+        cast[0].rotation.x = 0;
+      }
+    }
   }
 
   /** The camera rolls on a won scene: the director calls action and the set comes alive. */
@@ -1609,6 +1743,7 @@ export class LightingLevelSystem extends createSystem({
     devLog(`light ${fixture.item.kind} switched ${fixture.on ? 'off' : 'on'}`);
     fixture.on = !fixture.on;
     this.resetHold();
+    this.touchedSet();
   }
 
   private toggleHouse(): void {
@@ -1616,6 +1751,7 @@ export class LightingLevelSystem extends createSystem({
     if (!this.houseOn) this.houseEverOff = true;
     devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
     this.resetHold();
+    this.touchedSet();
   }
 
   /** Turns a bi-color light's dial one stop warmer (-1) or cooler (+1). */
@@ -1624,6 +1760,7 @@ export class LightingLevelSystem extends createSystem({
     const i = KELVIN_STEPS.indexOf(fixture.kelvin);
     const next = KELVIN_STEPS[MathUtils.clamp((i < 0 ? KELVIN_STEPS.length - 1 : i) + step, 0, KELVIN_STEPS.length - 1)];
     this.setKelvin(fixture, next);
+    this.touchedSet();
   }
 
   private setKelvin(fixture: Fixture, kelvin: number): void {
@@ -1643,6 +1780,7 @@ export class LightingLevelSystem extends createSystem({
     fixture.dimmer = MathUtils.clamp(Math.round((fixture.dimmer + step * DIMMER_STEP) * 10) / 10, DIMMER_STEP, 1);
     devLog(`light ${fixture.item.kind} dimmed to ${Math.round(fixture.dimmer * 100)}%`);
     this.resetHold();
+    this.touchedSet();
   }
 
   /** Builds the iPad's light row for the scene: HOUSE, each light in the kit, then the lamp. */
@@ -1796,6 +1934,10 @@ export class LightingLevelSystem extends createSystem({
       if (grabbed && !this.level.locked) {
         fixture.object.getWorldPosition(this.v1);
         fixture.local.copy(this.stage.worldToLocal(this.v1));
+        // Moving a light while they roll ruins the take (a quick tap is a switch flip, caught
+        // there). Measured from where it stood at the match, with room for a steady hand that
+        // is still holding it when the shot matches.
+        if (this.phase === 'won' && fixture.local.distanceTo(fixture.rollFrom) > ROLL_MOVE_SLACK) this.touchedSet();
         return;
       }
     } else if (fixture.grabTime > 0) {
@@ -1972,6 +2114,8 @@ export class LightingLevelSystem extends createSystem({
     this.ipad.object.visible = false;
     const bubbleVisible = this.bubble.mesh.visible;
     this.bubble.mesh.visible = false;
+    const castBubbleVisible = this.castBubble.mesh.visible;
+    this.castBubble.mesh.visible = false;
     const phoneVisible = this.phone.mesh.visible;
     this.phone.mesh.visible = false;
     this.cameraRig.visible = false;
@@ -1999,6 +2143,7 @@ export class LightingLevelSystem extends createSystem({
       }
       this.cameraRig.visible = true;
       this.bubble.mesh.visible = bubbleVisible;
+      this.castBubble.mesh.visible = castBubbleVisible;
       this.phone.mesh.visible = phoneVisible;
       this.ipad.object.visible = true;
       renderer.xr.enabled = xrEnabled;
@@ -2491,18 +2636,24 @@ export class LightingLevelSystem extends createSystem({
       return;
     }
     const { score, hint } = this.evaluate();
-    this.holdTime = score >= this.level.winScore ? this.holdTime + delta : 0;
+    // No new match while the crew are still reacting to a blown take.
+    this.holdTime = score >= this.level.winScore && this.blownTime < 0 ? this.holdTime + delta : 0;
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
       this.chime.play().catch(() => undefined);
       this.ipad.setStatus(score, '', true);
       // Tips still on their way are moot now (ben, round 11: tips kept coming after the win).
       this.phone.dropPending();
-      this.phone.text('dee', this.pickDeeWin());
-      this.showWinCard();
-      for (const text of this.level.texts ?? []) {
-        this.phone.text(text.from, text.text);
+      for (const fixture of this.fixtures) fixture.rollFrom.copy(fixture.local);
+      const retry = this.wonOnce;
+      if (!retry) this.phone.text('dee', this.pickDeeWin());
+      this.showWinCard(retry);
+      if (!retry) {
+        for (const text of this.level.texts ?? []) {
+          this.phone.text(text.from, text.text);
+        }
       }
+      this.wonOnce = true;
       return;
     }
     this.updateNudges(delta, score, hint);
@@ -2633,6 +2784,10 @@ export class LightingLevelSystem extends createSystem({
     };
     this.bubble.onShow = (_speaker, line) => sfx.mumble(line);
     this.world.scene.add(this.bubble.mesh);
+    // The actor's voice is higher than the director's.
+    this.castBubble.onShow = (_speaker, line) => sfx.mumble(line, 240);
+    this.castBubble.mesh.name = 'cast-speech-bubble';
+    this.world.scene.add(this.castBubble.mesh);
     this.buildDirector();
   }
 
@@ -2743,6 +2898,10 @@ export class LightingLevelSystem extends createSystem({
     }
     this.updateDirector(delta);
     this.bubble.update(delta);
+    // The actor's bubble (a blown take) floats over their head.
+    this.castBubble.mesh.position.copy(this.castBubbleAt);
+    camera.getWorldQuaternion(this.castBubble.mesh.quaternion);
+    this.castBubble.update(delta);
   }
 
   /**
@@ -2959,6 +3118,8 @@ export class LightingLevelSystem extends createSystem({
   private onPointerMove(event: PointerEvent): void {
     if (this.downPointer.distanceTo(this.v3.set(event.clientX, event.clientY)) > TAP_MAX_PIXELS) {
       this.dragMoved = true;
+      // Dragging a light while they roll ruins the take.
+      if (this.dragged && !this.level.locked) this.touchedSet();
     }
     if (this.dragged && this.level.locked) {
       // Rigged lights don't move; a click still flips the switch.
