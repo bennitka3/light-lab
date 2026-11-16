@@ -478,8 +478,9 @@ export const BETA_LEVELS: LevelDef[] = [
         label: 'Bounce card',
         kinds: ['bounce'],
         kindHint: 'the bounce card (white foam core)',
-        // Off to the side enough that the card stays out of the shot (it has width).
-        orbit: { az: 45, el: -5, d: 0.13 },
+        // Low, front-right, just past the silk's shadow so it catches full sun, and off to
+        // the side enough that the card stays out of the shot (it has width).
+        orbit: { az: 40, el: -5, d: 0.2 },
       },
     ],
     winScore: 85,
@@ -488,7 +489,7 @@ export const BETA_LEVELS: LevelDef[] = [
     after: 'the PA just asked if you\'ve done a lot of westerns 🤠',
     dee: [
       "you can't move the sun, you shape it. a silk overhead turns harsh sun into soft light",
-      "a bounce card throws some back up into their faces, so their eyes aren't dark holes",
+      "a bounce card throws the sun back up into their faces, so their eyes aren't dark holes. it only bounces sun that actually hits it",
     ],
   },
   {

@@ -385,13 +385,20 @@ function createSilkHead(head: Group): void {
 }
 
 function createBounceHead(head: Group): void {
-  // A 4x4 foam-core bounce card: white on the side facing the cast, black on the back.
-  const card = new Mesh(new BoxGeometry(0.05, 0.05, 0.0015), new MeshStandardMaterial({ color: '#141416', roughness: 0.9 }));
+  // A 4x4 foam-core bounce card, white on both sides (ben, 2026-11-15: a black back read as
+  // "not a bounce card"). It has no switch: it always throws back whatever sun hits it.
+  const card = new Mesh(new BoxGeometry(0.05, 0.05, 0.0015), new MeshStandardMaterial({ color: '#e9e5dc', roughness: 0.9 }));
   card.position.z = -0.001;
-  const face = new Mesh(new PlaneGeometry(0.049, 0.049), faceMaterial('#fff4e0'));
+  const material = faceMaterial('#fff4e0');
+  const face = new Mesh(new PlaneGeometry(0.049, 0.049), material);
   face.name = 'fixture-face';
   face.position.z = 0.0001;
-  head.add(card, face);
+  // The back shares the front's material, so it brightens and dims with it.
+  const back = new Mesh(face.geometry, material);
+  back.name = 'fixture-face-back';
+  back.rotation.y = Math.PI;
+  back.position.z = -0.0021;
+  head.add(card, face, back);
 }
 
 /**

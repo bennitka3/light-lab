@@ -169,8 +169,23 @@ const LIGHT_QUALITY: Record<
   // Light shapers (beta track): the silk re-emits the sun it blocks as a big soft top light,
   // the bounce card throws a little of it back up into the faces.
   silk: { color: '#fff4e4', intensity: 0.07, angleDeg: 75, penumbra: 1, shadowRadius: 14 },
-  bounce: { color: '#fff1dc', intensity: 0.05, angleDeg: 65, penumbra: 1, shadowRadius: 10 },
+  // Stands a bit further out than it used to (out of the silk's shade), so a bit brighter.
+  bounce: { color: '#fff1dc', intensity: 0.1, angleDeg: 65, penumbra: 1, shadowRadius: 10 },
 };
+/** How much sun a full silk lets through to a bounce card in its shade (about two stops). */
+const SILK_PASSES = 0.25;
+/** Points across the bounce card's face (head-local), to see how much of it the silk shades. */
+const CARD_SAMPLES: [number, number][] = [
+  [-0.02, -0.02],
+  [0, -0.02],
+  [0.02, -0.02],
+  [-0.02, 0],
+  [0, 0],
+  [0.02, 0],
+  [-0.02, 0.02],
+  [0, 0.02],
+  [0.02, 0.02],
+];
 const CTO_TINT = new Color('#ff9a45');
 /** The browser's background: a dark studio, or a hazy sky for outdoor scenes. */
 const STUDIO_BACKDROP = '#141416';
@@ -249,6 +264,8 @@ type Fixture = {
   /** Headset grab bookkeeping for telling a tap from a move. */
   grabTime: number;
   grabStart: Vector3;
+  /** Bounce card only: how much of it is out in the sun (1) rather than under a rigged silk (0). */
+  lit: number;
 };
 
 /** Something the player switches by pressing it: the HOUSE switch, a practical lamp. */
@@ -364,6 +381,9 @@ export class LightingLevelSystem extends createSystem({
   private greenScreen?: Mesh;
   /** A silk frame that only exists for the target shot, so the director's version blocks the sun too (beta track). */
   private targetSilk?: Mesh;
+  /** The set's sun (outdoor scenes), found once per set; null when the set has none. */
+  private sunLight?: DirectionalLight | null;
+  private sunDir = new Vector3();
 
   // House lights and switches.
   private houseOn = true;
@@ -921,6 +941,7 @@ export class LightingLevelSystem extends createSystem({
       if (child.name === 'crew-mat') child.visible = !outdoor;
     });
     this.set = createLevelSet(level.set);
+    this.sunLight = undefined;
     this.stage.add(this.set);
     this.greenScreen = (this.set.getObjectByName('green-screen') as Mesh | undefined) ?? undefined;
     this.carPending = Boolean(this.set.getObjectByName('car'));
@@ -1074,7 +1095,8 @@ export class LightingLevelSystem extends createSystem({
     } finally {
       renderer.setRenderTarget(previous);
       renderer.xr.enabled = xrEnabled;
-      for (const fixture of this.fixtures) fixture.spot.visible = fixture.on;
+      // A bounce card is never off.
+      for (const fixture of this.fixtures) fixture.spot.visible = fixture.on || fixture.item.kind === 'bounce';
     }
     this.warmup = count + 1;
   }
@@ -1163,6 +1185,7 @@ export class LightingLevelSystem extends createSystem({
       this.set.removeFromParent();
       disposeSet(this.set);
       this.set = undefined;
+      this.sunLight = undefined;
     }
     this.greenScreen = undefined;
     this.dragged = null;
@@ -1188,6 +1211,9 @@ export class LightingLevelSystem extends createSystem({
     if ((item.dial || item.dimmer || item.kind === 'silk' || item.kind === 'bounce') && face instanceof Mesh) {
       // Its own face material, so the glow can follow the dial (or the dimmer, or a shaper's state).
       face.material = (face.material as MeshStandardMaterial).clone();
+      // A bounce card is white on both sides: its back follows the front.
+      const back = head.getObjectByName('fixture-face-back');
+      if (back instanceof Mesh) back.material = face.material;
     }
     const spot = createSpot(item.kind);
     spot.name = `${item.kind}-light`;
@@ -1211,6 +1237,7 @@ export class LightingLevelSystem extends createSystem({
       dimmer: 1,
       grabTime: 0,
       grabStart: new Vector3(),
+      lit: 1,
     };
   }
 
@@ -1906,14 +1933,65 @@ export class LightingLevelSystem extends createSystem({
         const fabric = fixture.head.getObjectByName('fixture-face');
         if (fabric) fabric.castShadow = fixture.on;
       } else if (kind === 'bounce') {
-        // Off, the card is turned to its black side; on, the white side catches the sun.
-        fixture.face.color.set(fixture.on ? '#f4f1ea' : '#18181b');
-        fixture.face.emissiveIntensity = fixture.on ? 0.35 : 0;
+        // Set below: a bounce card is always catching sun.
       } else {
         fixture.face.emissiveIntensity = fixture.on ? 1.6 * glow : 0;
       }
     }
+    if (kind === 'bounce') {
+      // A bounce card is never "off" (ben, 2026-11-15): wherever it stands it throws back
+      // the sun hitting it, fading with distance like any light. Only a silk's shade cuts it.
+      fixture.lit = this.sunOnCard(fixture);
+      const sun = SILK_PASSES + (1 - SILK_PASSES) * fixture.lit;
+      fixture.spot.visible = true;
+      fixture.spot.intensity = LIGHT_QUALITY.bounce.intensity * sun;
+      if (fixture.face) {
+        fixture.face.color.set('#f4f1ea');
+        fixture.face.emissiveIntensity = 0.35 * sun;
+      }
+    }
     fixture.led.emissive.set(fixture.on ? '#4ade80' : '#3a1010');
+  }
+
+  /** The sun's direction (toward the sun) in stage-local space, or undefined indoors. */
+  private sunDirection(): Vector3 | undefined {
+    if (this.sunLight === undefined) {
+      const sun = this.set?.getObjectByName('sun');
+      this.sunLight = sun instanceof DirectionalLight ? sun : null;
+    }
+    const sun = this.sunLight;
+    if (!sun) return undefined;
+    sun.getWorldPosition(this.sunDir);
+    sun.target.getWorldPosition(this.v6);
+    this.stage.worldToLocal(this.sunDir);
+    this.stage.worldToLocal(this.v6);
+    return this.sunDir.sub(this.v6).normalize();
+  }
+
+  /** How much of the bounce card's face is out in the sun (1) rather than in a rigged silk's shade (0). */
+  private sunOnCard(fixture: Fixture): number {
+    const silk = this.fixtures.find((f) => f.item.kind === 'silk' && f.on);
+    if (!silk) return 1;
+    const toSun = this.sunDirection();
+    if (!toSun || toSun.y <= 0) return 1;
+    fixture.head.updateWorldMatrix(true, false);
+    const half = SILK_SIZE / 2;
+    let lit = 0;
+    for (const [a, b] of CARD_SAMPLES) {
+      const p = fixture.head.localToWorld(this.v5.set(a, b, 0));
+      this.stage.worldToLocal(p);
+      const rise = silk.local.y - p.y;
+      if (rise <= 0) {
+        lit++;
+        continue;
+      }
+      // Follow the sun ray up to the silk's height: does it pass through the fabric?
+      const t = rise / toSun.y;
+      const x = p.x + toSun.x * t - silk.local.x;
+      const z = p.z + toSun.z * t - silk.local.z;
+      if (Math.abs(x) > half || Math.abs(z) > half) lit++;
+    }
+    return lit / CARD_SAMPLES.length;
   }
 
   /** Does a light this high hang from the grid? Outdoors there is no grid: everything stands. */
@@ -2154,7 +2232,9 @@ export class LightingLevelSystem extends createSystem({
       if (fixture) used.add(fixture);
       const place = fixture ? this.roleFit(role, fixture.local) : 0;
       const dim = fixture ? this.dimmerFit(role, fixture) : 0;
-      return { role, fixture, fit: place * dim, place, dim };
+      // A bounce card in the silk's shade has little sun to throw back.
+      const sun = fixture?.item.kind === 'bounce' ? SILK_PASSES + (1 - SILK_PASSES) * fixture.lit : 1;
+      return { role, fixture, fit: place * dim * sun, place, dim };
     });
     const extras = on.filter((f) => !used.has(f));
     let fit = assigned.reduce((sum, a) => sum + a.fit, 0) / Math.max(assigned.length, 1);
@@ -2219,6 +2299,15 @@ export class LightingLevelSystem extends createSystem({
         hint: SHAPERS.has(extras[0].item.kind)
           ? `The ${itemName(extras[0].item)} isn't needed here. Drag it back behind the tape.`
           : `Too many lights: switch off the ${itemName(extras[0].item)}.`,
+      };
+    }
+    // The bounce card is in the silk's shade (the trap in the desert): say why it does nothing.
+    const shaded = assigned.find((a) => a.fixture?.item.kind === 'bounce' && a.fixture.lit < 0.5);
+    if (shaded) {
+      return {
+        score,
+        hint: "The bounce card is in the silk's shade, so it has no sun to bounce. Move it out into the sun.",
+        fixture: shaded.fixture,
       };
     }
     // Dimmers (beta track): once the lights are in place, say which one is too bright or too dark.

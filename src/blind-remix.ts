@@ -86,7 +86,7 @@ const REMIXES: Record<string, Remix> = {
   'beta-3-desert': {
     roles: {
       silk: { pos: [0.01, 0.19, -0.065] },
-      bounce: { orbit: { az: -45, el: -5, d: 0.13 } },
+      bounce: { orbit: { az: -40, el: -5, d: 0.2 } },
     },
     objective: 'Stand the big silk over their heads to soften the sun. Then a bounce card low in front, on the side my shot shows.',
   },
