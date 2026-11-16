@@ -137,6 +137,8 @@ const IN_FRAME_TEXT_SECONDS = 10;
 const NUDGE_SECONDS = 14;
 /** Dee only mentions the house lights once the player is this far into a scene. */
 const HOUSE_NUDGE_SECONDS = 20;
+/** How long the scene stays dark before the director's house lights come on (LevelDef.houseIntro). */
+const HOUSE_INTRO_SECONDS = 2.2;
 // Where the lower third and the phone ride in front of the headset view (meters, head space).
 // In the headset they sit about 85 cm out, near the lenses' focus distance and
 // the sharp middle of the view (first headset playtest: at 60 cm, low and off
@@ -374,6 +376,10 @@ export class LightingLevelSystem extends createSystem({
   /** The glowing undersides of the house light fixtures hanging from the grid. */
   private houseBulb?: MeshStandardMaterial;
   private switches: Switch[] = [];
+  /** The room's own light switch on the set's wall (scene 2's study): works the house lights too. */
+  private wallSwitch?: { switch: Switch; rocker: Object3D; pilot: MeshStandardMaterial };
+  /** When (performance.now() ms) the director hits the house lights at the start of a scene (LevelDef.houseIntro); -1 = not pending. */
+  private houseIntroIn = -1;
 
   // Camera shots and the monitor.
   private shotCamera!: PerspectiveCamera;
@@ -690,6 +696,11 @@ export class LightingLevelSystem extends createSystem({
             return f ? this.fixtures.indexOf(f) : -1;
           },
           houseOn: () => this.houseOn,
+          // The room's wall switch (scene 2): its rocker (+ = up/on) and pilot glow, or null.
+          wallSwitch: () =>
+            this.wallSwitch
+              ? { rocker: this.wallSwitch.rocker.rotation.z, pilot: this.wallSwitch.pilot.emissiveIntensity, introPending: this.houseIntroIn >= 0 }
+              : null,
           setHouse: (on: boolean) => {
             this.houseOn = on;
           },
@@ -863,6 +874,8 @@ export class LightingLevelSystem extends createSystem({
               this.ipad.object.localToWorld(v);
             } else if (what === 'phone') {
               this.phone.mesh.getWorldPosition(v);
+            } else if (what === 'wall-switch' && this.wallSwitch) {
+              this.wallSwitch.switch.hit.getWorldPosition(v);
             } else if (what === 'lamp' && this.practical) {
               this.practical.switch.hit.getWorldPosition(v);
             } else if (typeof what === 'number') {
@@ -989,6 +1002,26 @@ export class LightingLevelSystem extends createSystem({
       };
       this.practical = practical;
     }
+
+    // The room's light switch on the wall, if this set has one: a second HOUSE switch.
+    const wall = this.set.getObjectByName('house-switch');
+    const rocker = wall?.getObjectByName('house-switch-rocker');
+    const pilot = wall?.getObjectByName('house-switch-pilot');
+    if (wall && rocker && pilot instanceof Mesh) {
+      this.stage.updateMatrixWorld(true);
+      wall.getWorldPosition(this.v1);
+      // The press target is a bit bigger than the plate, so it's easy to hit with a ray.
+      this.wallSwitch = {
+        switch: this.createSwitch(this.v1, 0.035, () => {
+          this.houseIntroIn = -1;
+          sfx.click();
+          this.toggleHouse();
+        }),
+        rocker,
+        pilot: pilot.material as MeshStandardMaterial,
+      };
+    }
+    this.houseIntroIn = -1;
 
     // The kit, parked in a row behind the tape.
     const n = level.kit.length;
@@ -1159,6 +1192,11 @@ export class LightingLevelSystem extends createSystem({
       this.removeSwitch(this.practical.switch);
       this.practical = undefined;
     }
+    if (this.wallSwitch) {
+      this.removeSwitch(this.wallSwitch.switch);
+      this.wallSwitch = undefined;
+    }
+    this.houseIntroIn = -1;
     if (this.set) {
       this.set.removeFromParent();
       disposeSet(this.set);
@@ -1312,6 +1350,19 @@ export class LightingLevelSystem extends createSystem({
    * looking at you, and back to the set otherwise; plays a line waiting on that turn.
    */
   private updateDirector(delta: number): void {
+    if (this.houseIntroIn >= 0) {
+      // Wall-clock time: the frame that loads a scene can take a second on its own,
+      // which would otherwise eat the dark beat before anyone sees it.
+      if (performance.now() >= this.houseIntroIn) {
+        // Somebody hits the switch by the door. Cutting them later is still the player's job.
+        this.houseIntroIn = -1;
+        this.houseOn = true;
+        this.houseEverOff = false;
+        sfx.click();
+        devLog('director hit the house lights');
+        this.resetHold();
+      }
+    }
     if (this.pendingLine) {
       this.pendingLine.wait -= delta;
       if (this.pendingLine.wait <= 0) {
@@ -1354,6 +1405,11 @@ export class LightingLevelSystem extends createSystem({
 
   private showTitleCard(): void {
     this.bubble.hide();
+    // The scene behind the title page waits dark; Go plays the director's lights-on beat.
+    if (this.level.houseIntro) {
+      this.houseIntroIn = -1;
+      this.houseOn = this.level.houseStartsOn ?? true;
+    }
     const headset = this.immersive;
     this.showPage({
       full: true,
@@ -1397,7 +1453,15 @@ export class LightingLevelSystem extends createSystem({
     const level = this.level;
     // The iPad shows only the shots and the tip; the director gives the brief from the set.
     this.showPage({ eyebrow: this.sceneLabel(), body: '' });
-    this.say(level.quote);
+    if (level.houseIntro && !this.houseOn) {
+      // The scene opens dark; the director calls for the lights and they come on
+      // (ben, 2026-11-16: the kicked key was hard to find in the dark).
+      this.say(level.houseIntro);
+      this.houseIntroIn = performance.now() + HOUSE_INTRO_SECONDS * 1000;
+      this.sayNext(level.quote);
+    } else {
+      this.say(level.quote);
+    }
     this.sayNext(level.objective);
   }
 
@@ -1586,6 +1650,11 @@ export class LightingLevelSystem extends createSystem({
     // The iPad's own controls are handled by its pointer listener (it needs the hit point).
 
     this.setHouseLights(this.houseOn);
+    if (this.wallSwitch) {
+      // Rocker up = on. The pilot glows while the lights are off, to find it in the dark.
+      this.wallSwitch.rocker.rotation.z = this.houseOn ? 0.22 : -0.22;
+      this.wallSwitch.pilot.emissiveIntensity = this.houseOn ? 0 : 6;
+    }
     if (this.practical) {
       this.practical.shade.emissiveIntensity = this.practical.on ? 1.4 : 0;
       this.practical.bulb.intensity = this.practical.on ? 0.06 : 0;
