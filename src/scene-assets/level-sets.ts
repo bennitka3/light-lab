@@ -232,6 +232,37 @@ function createStudySet(): Group {
     set.add(block(0.025, 0.017, 0.001, mat('#efe8d6', 0.9), x, y, -0.1905));
   }
   set.add(desk);
+
+  // The room's light switch, on the camera-left wall by the front, nearest the
+  // director (ben, 2026-11-16: the kicked key was hard to find in the dark; "a
+  // switch on the wall would be cool"). A rocker in a cream plate, a little
+  // bigger than real (1:14 makes a real one about 5 mm), at about 1.2 m up. Its
+  // pilot light glows amber while the lights are off, so you can find it in the
+  // dark. The lighting system flips the rocker and works the house lights.
+  const plateX = -(STAGE_WIDTH / 2 - 0.007);
+  const houseSwitch = new Group();
+  houseSwitch.name = 'house-switch';
+  houseSwitch.position.set(plateX + 0.0008, 1.2 / 14, 0.13);
+  const plate = block(0.0016, 0.013, 0.008, mat('#ece4d0', 0.5), 0, 0, 0);
+  plate.castShadow = false;
+  const rocker = new Group();
+  rocker.name = 'house-switch-rocker';
+  rocker.position.set(0.0011, 0, 0);
+  const paddle = block(0.0012, 0.0062, 0.0036, mat('#f6f1e4', 0.35), 0, 0, 0);
+  paddle.castShadow = false;
+  const pilot = block(
+    0.0005,
+    0.0014,
+    0.0026,
+    new MeshStandardMaterial({ color: '#3a2a10', emissive: '#ffae3d', emissiveIntensity: 0 }),
+    0.0006,
+    -0.0042,
+    0,
+  );
+  pilot.name = 'house-switch-pilot';
+  rocker.add(paddle, pilot);
+  houseSwitch.add(plate, rocker);
+  set.add(houseSwitch);
   return set;
 }
 
