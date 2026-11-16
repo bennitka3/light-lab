@@ -282,7 +282,7 @@ export const CLASSIC_LEVELS: LevelDef[] = [
     after: "craft services is giving you the good sandwich now. you've made it 🥪",
     dee: [
       "one hard light, nearly straight overhead. hard = sharp shadows",
-      "low-key lighting: the dark does the storytelling. real ones hang from the grid, out of the shot",
+      "real ones hang from the grid. keep yours high and out of the shot or the take is ruined",
     ],
   },
   {
@@ -423,7 +423,7 @@ export const BETA_LEVELS: LevelDef[] = [
     dee: [
       "key = the main light, the one that shapes his face. the softbox here, so it's the brightest",
       "fill = the LED panel on the other side. softens the key's shadows, about half as bright",
-      "back light = the Fresnel behind him. just a shine on his hair so he pops off the background",
+      "back light = the Fresnel behind him. brighter than the fill, not as bright as the key",
     ],
   },
   {
@@ -449,8 +449,8 @@ export const BETA_LEVELS: LevelDef[] = [
     objective: 'One soft key: 45° to the side, a bit above the eyes. Then set its brightness.',
     after: 'ok you can MOVE lights now. who even are you',
     dee: [
-      "softbox = your key. front-left of him, a bit above his eyes",
-      "place it first, then dim it. moving a light closer makes it brighter too",
+      "softbox = your key. 45° off the camera, a bit above his eyes",
+      "place it first, then dim it. once it's in its spot, the dimmer sets how bright it is",
     ],
   },
   {
@@ -526,8 +526,8 @@ export const BETA_LEVELS: LevelDef[] = [
     directorWin: '"Somebody get that dog an agent."',
     after: 'the dog has more followers than you now 🐶',
     dee: [
-      "on an LED volume the wall is your background AND part of your light",
-      "a big soft source over a car = one long clean highlight on the paint. faces just need a gentle key",
+      "the LED wall already lights them from behind, so you only add two lights: a top and a key",
+      "a big soft source over a car = one long clean highlight on the paint. then a key through the windows for the faces",
     ],
   },
 ];
@@ -569,7 +569,7 @@ const KEY_AND_BACK: LevelDef = {
   dee: [
     'key first: softbox, 45° off the camera, a bit above his eyes.',
     'back light goes high behind him, on the opposite side from the key. just a rim on his hair',
-    'place first, dim second. moving a light closer makes it brighter too',
+    'place first, dim second. once a light is in its spot, its dimmer sets how bright it is',
   ],
 };
 

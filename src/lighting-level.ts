@@ -2,6 +2,7 @@ import {
   AssetManager,
   Box3,
   BoxGeometry,
+  Quaternion,
   CanvasTexture,
   Color,
   CylinderGeometry,
@@ -483,6 +484,9 @@ export class LightingLevelSystem extends createSystem({
   private v4 = new Vector3();
   private v5 = new Vector3();
   private v6 = new Vector3();
+  /** The player's view direction in stage space, for "to your left/right" tips. */
+  private faceDir = new Vector3();
+  private stageQuat = new Quaternion();
   /** The move the tip asked for last (which light, axis 0/1/2 = x/y/z, sign), so the tip doesn't flip-flop. */
   private tipMove = { role: '', axis: -1, sign: 0 };
   /** "Height looks good." once the player has finished one direction and the tip moves on to another. */
@@ -619,7 +623,9 @@ export class LightingLevelSystem extends createSystem({
       this.updateScore(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
-      this.phone.update(delta);
+      // Texts about the house lights dim once they're off (and brighten again if they go back on).
+    this.phone.setResolved('house', !this.houseOn);
+    this.phone.update(delta);
       this.scrollPhoneWithThumbstick(delta);
       this.placeHud(delta);
       this.updateHoverTag();
@@ -803,6 +809,7 @@ export class LightingLevelSystem extends createSystem({
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
           phoneVisible: () => this.phone.visibleTexts,
+          phoneBright: () => this.phone.brightTexts,
           levelDee: () => this.level.dee,
           ledOffset: () => {
             const wall = this.set?.getObjectByName('led-wall') as Mesh | undefined;
@@ -815,7 +822,7 @@ export class LightingLevelSystem extends createSystem({
           },
           hasObject: (name: string) => !!this.set?.getObjectByName(name),
           phoneScrolledBack: () => this.phone.scrolledBack,
-          dee: (text: string) => this.phone.text('dee', text),
+          dee: (text: string, topic?: string) => this.phone.text('dee', text, topic),
           clearPhone: () => this.phone.clear(),
           // How far (radians) the director has turned from his resting pose, e.g. to look at you.
           directorTurn: () => (this.directorModel ? this.directorModel.rotation.y - this.directorYaw : null),
@@ -890,6 +897,8 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
+    // New scene: the last scene's texts dim; this scene's notes arrive bright.
+    this.phone.setStep(`scene:${index}`);
     this.takeTime = -1;
     this.directorLooking = false;
     this.houseOn = this.level.houseStartsOn ?? true;
@@ -1487,6 +1496,7 @@ export class LightingLevelSystem extends createSystem({
 
   private rollFinale(): void {
     this.phase = 'rolled';
+    this.phone.setStep('finale');
     if (this.greenScreen) {
       const plate = paintLakeComo();
       this.greenScreen.material = new MeshBasicMaterial({ map: plate, toneMapped: false });
@@ -2436,7 +2446,10 @@ export class LightingLevelSystem extends createSystem({
         move = `${bestSign > 0 ? 'Raise' : 'Lower'} the ${lower}${bit}.`;
       }
     } else if (bestAxis === 0) {
-      move = `${verb} the ${lower}${bit} toward camera-${bestSign < 0 ? 'left' : 'right'}.`;
+      // ben, 2026-11-16: "toward camera-left" could mean frame left or the camera's own
+      // left. Say it from where the player is looking: their own left or right.
+      const left = bestSign < 0 !== this.facingCamera();
+      move = `${verb} the ${lower}${bit} to your ${left ? 'left' : 'right'}.`;
     } else if (role.pos && role.aim === 'screen') {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
     } else {
@@ -2445,6 +2458,13 @@ export class LightingLevelSystem extends createSystem({
       move = bestSign < 0 ? `${verb} the ${lower}${bit} back, deeper into the set.` : `${verb} the ${lower}${bit} forward, toward you.`;
     }
     return this.tipDone + move;
+  }
+
+  /** The player is looking back toward the camera (from the set's far side), so their left is the stage's right. */
+  private facingCamera(): boolean {
+    this.world.camera.getWorldDirection(this.faceDir);
+    this.stage.getWorldQuaternion(this.stageQuat).invert();
+    return this.faceDir.applyQuaternion(this.stageQuat).z > 0;
   }
 
   /** The direction (not in `skip`, a bitmask of axes) whose step helps most: a full step, else a half step ("nudge"). */
@@ -2494,6 +2514,8 @@ export class LightingLevelSystem extends createSystem({
     this.holdTime = score >= this.level.winScore ? this.holdTime + delta : 0;
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
+      // The scene's notes and nudges are done: they dim, the win texts arrive bright.
+      this.phone.setStep(`won:${this.levelIndex}`);
       this.chime.play().catch(() => undefined);
       this.ipad.setStatus(score, '', true);
       // Tips still on their way are moot now (ben, round 11: tips kept coming after the win).
@@ -2517,10 +2539,15 @@ export class LightingLevelSystem extends createSystem({
   private updateNudges(delta: number, score: number, hint: string): void {
     const framed = this.framedFixture();
     this.inFrameTime = framed && framed === this.inFrameFixture ? this.inFrameTime + delta : 0;
+    if (framed !== this.inFrameFixture) {
+      // "the light is IN THE SHOT" dims once it's out of the shot, and brightens if it wanders back.
+      if (this.inFrameFixture) this.phone.setResolved(this.inFrameFixture, true);
+      if (framed) this.phone.setResolved(framed, false);
+    }
     this.inFrameFixture = framed;
     if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted.has(framed)) {
       this.inFrameTexted.add(framed);
-      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`);
+      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`, framed);
     }
     this.sinceNudge += delta;
     this.sceneTime += delta;
@@ -2529,7 +2556,7 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && this.lastNudge !== `house:${this.levelIndex}`) {
       this.lastNudge = `house:${this.levelIndex}`;
       this.sinceNudge = 0;
-      this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱');
+      this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱', 'house');
     }
     // Time the house lights have been on while lights are on the set.
     if (this.houseOn && this.fixtures.some((f) => f.on)) this.houseWork += delta;
@@ -2543,7 +2570,7 @@ export class LightingLevelSystem extends createSystem({
             ? 'the house lights are flattening everything. turn them off!'
             : ['psst... house lights...', "don't forget to cut the house lights 👀"][this.houseTexts % 2];
         this.houseTexts += 1;
-        this.phone.text('dee', text);
+        this.phone.text('dee', text, 'house');
       }
       this.lastHint = hint;
       return;
