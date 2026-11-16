@@ -134,6 +134,8 @@ export class PhoneHud {
    * step; a `topic` (any key) marks a nudge about one problem, dimmed once it's fixed.
    */
   text(from: Text['from'], text: string, topic?: unknown): void {
+    // Never the same text twice in one step (ben, 2026-11-16: the house-lights text came 5 times).
+    if (this.messages.some((m) => m.step === this.step && m.text === text) || this.queue.some((m) => m.text === text)) return;
     this.queue.push({ from, text, step: this.step, topic });
   }
 

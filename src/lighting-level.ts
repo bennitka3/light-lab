@@ -2,7 +2,6 @@ import {
   AssetManager,
   Box3,
   BoxGeometry,
-  Quaternion,
   CanvasTexture,
   Color,
   CylinderGeometry,
@@ -442,6 +441,8 @@ export class LightingLevelSystem extends createSystem({
   private houseEverOff = false;
   private sceneTime = 0;
   private houseTexts = 0;
+  /** Dee has texted about the house lights this scene (once per scene: ben saw it 5 times in a row). */
+  private houseNudged = false;
   /** Seconds the house lights have been on while lights were on the set, this scene. */
   private houseWork = 0;
 
@@ -484,9 +485,6 @@ export class LightingLevelSystem extends createSystem({
   private v4 = new Vector3();
   private v5 = new Vector3();
   private v6 = new Vector3();
-  /** The player's view direction in stage space, for "to your left/right" tips. */
-  private faceDir = new Vector3();
-  private stageQuat = new Quaternion();
   /** The move the tip asked for last (which light, axis 0/1/2 = x/y/z, sign), so the tip doesn't flip-flop. */
   private tipMove = { role: '', axis: -1, sign: 0 };
   /** "Height looks good." once the player has finished one direction and the tip moves on to another. */
@@ -905,6 +903,7 @@ export class LightingLevelSystem extends createSystem({
     this.houseEverOff = !this.houseOn;
     this.sceneTime = 0;
     this.houseWork = 0;
+    this.houseNudged = false;
     this.holdTime = 0;
     this.inFrameTime = 0;
     this.inFrameTexted.clear();
@@ -2446,25 +2445,18 @@ export class LightingLevelSystem extends createSystem({
         move = `${bestSign > 0 ? 'Raise' : 'Lower'} the ${lower}${bit}.`;
       }
     } else if (bestAxis === 0) {
-      // ben, 2026-11-16: "toward camera-left" could mean frame left or the camera's own
-      // left. Say it from where the player is looking: their own left or right.
-      const left = bestSign < 0 !== this.facingCamera();
-      move = `${verb} the ${lower}${bit} to your ${left ? 'left' : 'right'}.`;
+      // ben, 2026-11-16: "camera-left" could mean frame left or the camera's own left, and
+      // "your left" breaks once you walk into the set. Name something on the set instead:
+      // the director sits on the -x side in every scene, craft services (the chef) on the +x side.
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} toward the director.` : `${verb} the ${lower}${bit} toward craft services.`;
     } else if (role.pos && role.aim === 'screen') {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
     } else {
-      // Forward and back as the player sees the set from behind the camera (ben, round 9:
-      // "away from the camera" confused him when the light already stood beside it).
-      move = bestSign < 0 ? `${verb} the ${lower}${bit} back, deeper into the set.` : `${verb} the ${lower}${bit} forward, toward you.`;
+      // ben, 2026-11-16: "forward, toward you" breaks if you walked into the set. The film
+      // camera is in every scene and doesn't move, so measure from it.
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} further from the camera.` : `${verb} the ${lower}${bit} closer to the camera.`;
     }
     return this.tipDone + move;
-  }
-
-  /** The player is looking back toward the camera (from the set's far side), so their left is the stage's right. */
-  private facingCamera(): boolean {
-    this.world.camera.getWorldDirection(this.faceDir);
-    this.stage.getWorldQuaternion(this.stageQuat).invert();
-    return this.faceDir.applyQuaternion(this.stageQuat).z > 0;
   }
 
   /** The direction (not in `skip`, a bitmask of axes) whose step helps most: a full step, else a half step ("nudge"). */
@@ -2553,8 +2545,10 @@ export class LightingLevelSystem extends createSystem({
     this.sceneTime += delta;
     // The quiet gotcha (LevelDef.houseHint 'ambient'): the tip only says "too much
     // ambient light"; after a while Dee comes to the rescue, once per scene.
-    if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && this.lastNudge !== `house:${this.levelIndex}`) {
-      this.lastNudge = `house:${this.levelIndex}`;
+    if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && !this.houseNudged) {
+      // Its own flag: lastNudge gets overwritten by the stuck-on-a-hint check below,
+      // which let this fire again every NUDGE_SECONDS (ben, 2026-11-16, car scene).
+      this.houseNudged = true;
       this.sinceNudge = 0;
       this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱', 'house');
     }
@@ -2562,8 +2556,8 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn && this.fixtures.some((f) => f.on)) this.houseWork += delta;
     if (this.houseOn && !this.houseEverOff && this.level.houseHint !== 'ambient' && this.houseWork > HOUSE_NUDGE_SECONDS) {
       // Only once the player has been placing lights a while with them still on.
-      if (this.sinceNudge > NUDGE_SECONDS && this.lastNudge !== `house:${this.levelIndex}`) {
-        this.lastNudge = `house:${this.levelIndex}`;
+      if (this.sinceNudge > NUDGE_SECONDS && !this.houseNudged) {
+        this.houseNudged = true;
         this.sinceNudge = 0;
         const text =
           this.houseTexts === 0

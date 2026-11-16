@@ -4,6 +4,7 @@
 // 2. After the win, the scene's notes dim and the win texts are bright.
 // 3. Next scene: the last scene's texts dim, the new notes are bright.
 // 4. A house-lights nudge dims once the house lights are off.
+// 5. Left idle, a text never repeats (the car scene's house-lights text came 5+ times).
 // Usage: node scripts/phone-focus.cjs [url] [outDir]
 const { chromium } = require('playwright');
 
@@ -26,7 +27,7 @@ const { chromium } = require('playwright');
     results[name] = ok;
     console.log(ok ? 'PASS' : 'FAIL', name, detail === undefined ? '' : JSON.stringify(detail));
   };
-  const arrived = (text) => page.waitForFunction((t) => window.lightLab.texts().includes(`dee: ${t}`), text, { timeout: 90000 }).catch((e) => console.log('timed out waiting for', text, e.message.slice(0, 80)));
+  const arrived = (text) => page.waitForFunction((t) => window.lightLab.texts().includes(`dee: ${t}`) && window.lightLab.phoneVisible().includes(t), text, { timeout: 120000 }).catch((e) => console.log('timed out waiting for', text, e.message.slice(0, 80)));
   const phone = () => api(() => ({ shown: window.lightLab.phoneVisible(), bright: window.lightLab.phoneBright() }));
 
   const ids = await api(() => window.lightLab.levelIds());
@@ -42,7 +43,7 @@ const { chromium } = require('playwright');
 
   await api(() => window.lightLab.solve());
   await page.waitForFunction(() => window.lightLab.level().phase === 'won', null, { timeout: 30000 }).catch(() => {});
-  await page.waitForFunction((n) => window.lightLab.texts().length > n, await api(() => window.lightLab.texts().length), { timeout: 60000 }).catch((e) => console.log('no win text arrived', e.message.slice(0, 80)));
+  await page.waitForFunction((n) => window.lightLab.phoneBright().some((t) => !n.includes(t)), notes, { timeout: 60000 }).catch((e) => console.log('no win text arrived', e.message.slice(0, 80)));
   await wait(1500);
   p = await phone();
   check('after the win the scene notes are dimmed', notes.every((l) => !p.bright.includes(l)), p);
@@ -72,6 +73,22 @@ const { chromium } = require('playwright');
   p = await phone();
   check('house nudge dims once the house lights are off', !p.bright.some((t) => /house lights/.test(t)) && p.shown.some((t) => /house lights/.test(t)), p);
   await page.screenshot({ path: `${out}/phone-4-house-fixed.png` });
+
+  // ben, 2026-11-16: on the car scene, left idle, "wait. THE HOUSE LIGHTS" came 5+ times.
+  // Each text arrives at most once a scene, however long the player stands still.
+  await api(() => window.lightLab.clearPhone());
+  const logStart = await api(() => window.lightLab.texts().length);
+  await api(() => window.lightLab.loadLevelId('beta-4-car'));
+  await api(() => window.lightLab.setHouse(true));
+  await api(() => window.lightLab.toggle('softbox'));
+  await wait(90000);
+  const all = (await api(() => window.lightLab.texts())).slice(logStart).filter((t) => /house lights/i.test(t));
+  check('idle on the car scene: the house-lights text comes once', all.length === 1, all);
+  await api(() => window.lightLab.dee('same text twice'));
+  await api(() => window.lightLab.dee('same text twice'));
+  await wait(6000);
+  const twice = (await api(() => window.lightLab.texts())).slice(logStart).filter((t) => t === 'dee: same text twice');
+  check('the phone never sends the same text twice in a step', twice.length === 1, twice);
 
   check('no page errors', errors.length === 0, errors);
   await browser.close();
