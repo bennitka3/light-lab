@@ -93,7 +93,8 @@ const { chromium } = require('playwright');
     const s = await state();
     await wait(2500);
     const after = await state();
-    check(`scene ${i + 1} solution has nothing in frame and wins`, s.inFrame === null && after.phase === 'won', { inFrame: s.inFrame, after });
+    // (The last scene rolls its finale by itself a few seconds after the match: 'rolled'.)
+    check(`scene ${i + 1} solution has nothing in frame and wins`, s.inFrame === null && ['won', 'rolled'].includes(after.phase), { inFrame: s.inFrame, after });
     const placement = await api(() => window.lightLab.placement());
     check(`scene ${i + 1} (${ids[i]}): nothing placed unrealistically`, placement.length === 0, placement);
   }
@@ -161,8 +162,11 @@ const { chromium } = require('playwright');
   await wait(2500);
   const s2b = await state();
   check('scene 2: fixing the key wins', s2b.phase === 'won', s2b);
-  await page.screenshot({ path: `${out}/08-scene2-won.png` });
+  // He turns to you first, then speaks; read the line before the screenshot (in software
+  // rendering a screenshot stalls for seconds of game time, past his line and into the take).
+  await page.waitForFunction(() => typeof window.lightLab.bubble() === 'string', null, { polling: 'raf', timeout: 8000 }).catch(() => {});
   const line = await api(() => window.lightLab.bubble());
+  await page.screenshot({ path: `${out}/08-scene2-won.png` });
   check('win line comes from the director, on set', typeof line === 'string' && line.startsWith('"'), line);
 
   // Round 2. 6. Hints for lights behind the cast say plain moves, not "swing".
