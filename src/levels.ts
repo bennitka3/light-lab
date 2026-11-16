@@ -94,6 +94,12 @@ export type LevelDef = {
   /** Whether the house lights start on. Defaults to true. */
   houseStartsOn?: boolean;
   /**
+   * The scene opens dark and the director hits the house lights with this line
+   * (ben, 2026-11-16: the kicked key on the floor was hard to find in the dark).
+   * Pair it with houseStartsOn: false. The set needs a "house-switch" on its wall.
+   */
+  houseIntro?: string;
+  /**
    * Dee's notes, texted when the scene starts. ben, round 11: Dee is your training
    * guide. The iPad tip says WHAT to do; Dee says WHY, and where a real gaffer puts
    * it. Short (they must all fit on the phone together), no button instructions.
@@ -161,7 +167,9 @@ export const CLASSIC_LEVELS: LevelDef[] = [
       { kit: 1, az: 45, el: 10, d: 0.19 },
       { kit: 2, az: 150, el: 45, d: 0.14 },
     ],
+    // Opens dark; the director hits the wall switch so you can find the kicked key.
     houseStartsOn: false,
+    houseIntro: '"Who killed the lights? I can\'t see a thing in here."',
     roles: [
       {
         id: 'key',

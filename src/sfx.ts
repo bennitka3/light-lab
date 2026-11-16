@@ -53,6 +53,23 @@ export function textChime(): void {
   });
 }
 
+/** A wall switch flipping: a short, low clack. */
+export function click(): void {
+  const ac = ready();
+  if (!ac || !master) return;
+  const t = ac.currentTime;
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(900, t);
+  osc.frequency.exponentialRampToValueAtTime(140, t + 0.03);
+  gain.gain.setValueAtTime(0.3, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+  osc.connect(gain).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.06);
+}
+
 /**
  * The director's voice: a muted-trumpet "wah-wah", one syllable for every
  * couple of words, capped at a few seconds so long lines don't drone.
