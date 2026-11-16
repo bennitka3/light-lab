@@ -108,6 +108,8 @@ export class IPad {
    */
   blind = false;
   private hint = '';
+  /** A first-time how-to (the coach), shown in yellow on the tip line instead of the tip. */
+  private coach = '';
   private won = false;
   /** The light switches along the row under the shots. */
   private lights: LightButton[] = [];
@@ -284,6 +286,32 @@ export class IPad {
     this.draw();
   }
 
+  /** Shows (or clears, with '') a first-time how-to on the tip line, in yellow. */
+  setCoach(text: string): void {
+    if (text === this.coach) return;
+    this.coach = text;
+    this.draw();
+  }
+
+  /**
+   * Where a control (or one of the two shots) sits on the iPad, in its own meters
+   * (origin at the center): its center and size. The coach rings it.
+   */
+  frameOf(what: 'target' | 'live' | ((control: IPadControl) => boolean)): { x: number; y: number; w: number; h: number } | null {
+    if (what === 'target' || what === 'live') {
+      const shot = this.shots[what === 'target' ? 0 : 1];
+      return { x: shot.position.x, y: shot.position.y, w: SHOT_W, h: SHOT_H };
+    }
+    const rect = this.rects.find((r) => what(r.control));
+    if (!rect) return null;
+    return {
+      x: (rect.x + rect.w / 2) / PX - IPAD_WIDTH / 2,
+      y: IPAD_HEIGHT / 2 - (rect.y + rect.h / 2) / PX,
+      w: rect.w / PX,
+      h: rect.h / PX,
+    };
+  }
+
   /** Redraws the over-the-live-shot layer (for effects that come and go). */
   refreshOverlay(): void {
     const ctx = this.overlayCanvas.getContext('2d');
@@ -394,10 +422,12 @@ export class IPad {
 
     // The tip (or "Cut!"), with the button beside it when there is one.
     const textW = barW - (page.button ? m(SMALL_BUTTON.w + 0.01) : 0);
-    ctx.fillStyle = '#ffffff';
     ctx.font = `bold ${m(0.0112)}px system-ui, sans-serif`;
     // A won take leaves the tip line empty: the director and Dee do the talking.
-    const headline = page.body || (this.won ? '' : this.blind ? 'No bar today. Match the target by eye.' : this.hint);
+    // The coach's how-to (yellow, like the ring around the control it means) comes before the tip.
+    const coaching = !page.body && !this.won && this.coach !== '';
+    ctx.fillStyle = coaching ? '#f5d90a' : '#ffffff';
+    const headline = page.body || (this.won ? '' : coaching ? this.coach : this.blind ? 'No bar today. Match the target by eye.' : this.hint);
     // Long tips shrink to fit on the one line rather than getting cut off.
     let tipSize = 0.0112;
     while (ctx.measureText(headline).width > textW && tipSize > 0.0084) {

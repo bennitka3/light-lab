@@ -330,7 +330,7 @@ const { chromium } = require('playwright');
   await wait(300);
   const blown = await api(() => ({ phase: window.lightLab.level().phase, take: window.lightLab.take(), bubble: window.lightLab.bubble(), card: window.lightLab.card() }));
   check('touching a light mid-take: the director yells Cut, the take stops, back to playing', blown.phase === 'playing' && blown.take < 0 && /CUT/.test(blown.bubble ?? '') && !blown.card.button, blown);
-  await wait(1900);
+  await page.waitForFunction(() => window.lightLab.castBubble(), null, { polling: 'raf', timeout: 15000 }).catch(() => {});
   const tantrum = await api(() => window.lightLab.castBubble());
   check('the actor blows up over the ruined take', /Amateur|moment|real gaffer|LIGHTS/.test(tantrum ?? ''), { tantrum });
   await page.waitForFunction(() => /Back to one/.test(window.lightLab.bubble() ?? ''), null, { timeout: 15000 }).catch(() => {});
