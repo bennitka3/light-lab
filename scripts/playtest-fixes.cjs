@@ -176,7 +176,7 @@ const { chromium } = require('playwright');
   await api((i) => window.lightLab.placeAt(i, -0.06, 0.2, -0.14), back7);
   await wait(600);
   const h2 = (await state()).hint;
-  check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /camera-right|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
+  check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /craft services|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
 
   // 7. The director's lines come from the set; Mom arrives as a banner, not in Dee's chat.
   await api(() => window.lightLab.loadLevelId('sunset'));

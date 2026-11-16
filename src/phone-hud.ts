@@ -50,6 +50,17 @@ const CHAT_BOTTOM = PX_H - 50;
 /** How far one press of "earlier" scrolls (canvas pixels). */
 const EARLIER_STEP = 260;
 
+/**
+ * A text on the phone, tagged with the step of the game it was sent for (a scene being
+ * played, or a scene just won) and, for a nudge, the problem it is about. ben,
+ * 2026-11-16: texts for the step you're on are bright; ones you've done or that no
+ * longer matter are dimmed.
+ */
+type Message = Text & { step: string; topic?: unknown };
+
+/** How strongly a dimmed text shows (0..1). */
+const DIM_ALPHA = 0.38;
+
 const CONTACTS: Record<Text['from'], { name: string; color: string }> = {
   dee: { name: 'Dee (video village)', color: '#a78bfa' },
   mom: { name: 'Mom', color: '#f472b6' },
@@ -59,8 +70,12 @@ export class PhoneHud {
   readonly mesh: Mesh;
   private canvas = document.createElement('canvas');
   private texture: CanvasTexture;
-  private messages: Text[] = [];
-  private queue: Text[] = [];
+  private messages: Message[] = [];
+  private queue: Message[] = [];
+  /** The step the game is on now; texts sent for another step are dimmed. */
+  private step = '';
+  /** Problems a nudge was about that the player has since fixed (their texts are dimmed). */
+  private resolved = new Set<unknown>();
   private typing = 0;
   private banner?: Text;
   private bannerTime = 0;
@@ -94,6 +109,8 @@ export class PhoneHud {
   readonly log: Text[] = [];
   /** The texts fully on screen at the last draw, for tests. */
   visibleTexts: string[] = [];
+  /** The texts on screen at the last draw that are bright (for the current step), for tests. */
+  brightTexts: string[] = [];
 
   constructor() {
     this.canvas.width = PX_W;
@@ -112,9 +129,35 @@ export class PhoneHud {
     this.mesh.visible = false;
   }
 
-  /** Queues a text; it arrives after a short "typing" moment. */
-  text(from: Text['from'], text: string): void {
-    this.queue.push({ from, text });
+  /**
+   * Queues a text; it arrives after a short "typing" moment. It belongs to the current
+   * step; a `topic` (any key) marks a nudge about one problem, dimmed once it's fixed.
+   */
+  text(from: Text['from'], text: string, topic?: unknown): void {
+    // Never the same text twice in one step (ben, 2026-11-16: the house-lights text came 5 times).
+    if (this.messages.some((m) => m.step === this.step && m.text === text) || this.queue.some((m) => m.text === text)) return;
+    this.queue.push({ from, text, step: this.step, topic });
+  }
+
+  /** Moves the phone to a new step of the game: texts from earlier steps dim. */
+  setStep(step: string): void {
+    if (step === this.step) return;
+    this.step = step;
+    this.resolved.clear();
+    if (this.mesh.visible) this.draw(this.typing > 0);
+  }
+
+  /** Marks the problem a nudge was about as fixed (dim) or back again (bright). */
+  setResolved(topic: unknown, done: boolean): void {
+    if (this.resolved.has(topic) === done) return;
+    if (done) this.resolved.add(topic);
+    else this.resolved.delete(topic);
+    if (this.mesh.visible) this.draw(this.typing > 0);
+  }
+
+  /** Whether a text is for the step the player is on (bright) or done/no longer relevant (dim). */
+  private isCurrent(message: Message): boolean {
+    return message.step === this.step && (message.topic === undefined || !this.resolved.has(message.topic));
   }
 
   clear(): void {
@@ -341,19 +384,33 @@ export class PhoneHud {
     }
     this.hiddenAbove = false;
     this.visibleTexts = [];
+    this.brightTexts = [];
     for (let i = layout.length - 1; i >= 0; i--) {
       const { lines, width, height } = layout[i];
       if (y - height < top - 2) {
         this.hiddenAbove = true;
       }
       if (y < top - 8) break;
-      if (y - height >= top - 2 && y <= bottom + 2) this.visibleTexts.push(this.messages[i].text);
+      const current = this.isCurrent(this.messages[i]);
+      if (y - height >= top - 2 && y <= bottom + 2) {
+        this.visibleTexts.push(this.messages[i].text);
+        if (current) this.brightTexts.push(this.messages[i].text);
+      }
       if (y - height <= bottom + 8) {
+        // The current step's texts: a lighter bubble, white text and a thin edge in Dee's
+        // color. Done or stale texts fade back so the eye skips them.
+        ctx.globalAlpha = current ? 1 : DIM_ALPHA;
         roundRect(ctx, 34, y - height, width, height, 22);
-        ctx.fillStyle = '#2c2c2e';
+        ctx.fillStyle = current ? '#3f3f46' : '#2c2c2e';
         ctx.fill();
-        ctx.fillStyle = '#f4f4f5';
+        if (current) {
+          ctx.strokeStyle = CONTACTS.dee.color;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        ctx.fillStyle = current ? '#ffffff' : '#d4d4d8';
         lines.forEach((line, j) => ctx.fillText(line, 56, y - height + BUBBLE_PAD / 2 + FONT_PX - 2 + j * LINE_H));
+        ctx.globalAlpha = 1;
       }
       y -= height + BUBBLE_GAP;
     }
