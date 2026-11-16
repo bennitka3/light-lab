@@ -378,7 +378,7 @@ export class LightingLevelSystem extends createSystem({
   private switches: Switch[] = [];
   /** The room's own light switch on the set's wall (scene 2's study): works the house lights too. */
   private wallSwitch?: { switch: Switch; rocker: Object3D; pilot: MeshStandardMaterial };
-  /** Seconds until the director hits the house lights at the start of a scene (LevelDef.houseIntro); -1 = not pending. */
+  /** When (performance.now() ms) the director hits the house lights at the start of a scene (LevelDef.houseIntro); -1 = not pending. */
   private houseIntroIn = -1;
 
   // Camera shots and the monitor.
@@ -1351,9 +1351,11 @@ export class LightingLevelSystem extends createSystem({
    */
   private updateDirector(delta: number): void {
     if (this.houseIntroIn >= 0) {
-      this.houseIntroIn -= delta;
-      if (this.houseIntroIn < 0) {
+      // Wall-clock time: the frame that loads a scene can take a second on its own,
+      // which would otherwise eat the dark beat before anyone sees it.
+      if (performance.now() >= this.houseIntroIn) {
         // Somebody hits the switch by the door. Cutting them later is still the player's job.
+        this.houseIntroIn = -1;
         this.houseOn = true;
         this.houseEverOff = false;
         sfx.click();
@@ -1455,7 +1457,7 @@ export class LightingLevelSystem extends createSystem({
       // The scene opens dark; the director calls for the lights and they come on
       // (ben, 2026-11-16: the kicked key was hard to find in the dark).
       this.say(level.houseIntro);
-      this.houseIntroIn = HOUSE_INTRO_SECONDS;
+      this.houseIntroIn = performance.now() + HOUSE_INTRO_SECONDS * 1000;
       this.sayNext(level.quote);
     } else {
       this.say(level.quote);
