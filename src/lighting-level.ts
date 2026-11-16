@@ -36,6 +36,7 @@ import {
   VisibilityState,
   WebGLRenderTarget,
 } from '@iwsdk/core';
+import { CoachRing } from './coach.js';
 import { CreatureFeature } from './creature-feature.js';
 import { OPERATOR_ASSET, attachCameraOperator } from './camera-operator.js';
 import { LightingStage, StageLight } from './lighting-components.js';
@@ -243,6 +244,11 @@ const DIMMER_TOLERANCE = 0.25;
 function dimmerGain(level: number): number {
   return 1.8 * level * level;
 }
+
+/** The controls the coach teaches, in the order it teaches them. */
+const COACH_SKILLS = ['shots', 'house', 'look', 'switch', 'drag', 'raise', 'dimmer', 'phone'] as const;
+type CoachSkill = (typeof COACH_SKILLS)[number];
+type CoachLesson = { skill: CoachSkill; text: string };
 
 type Fixture = {
   entity: Entity;
@@ -517,6 +523,24 @@ export class LightingLevelSystem extends createSystem({
   private tipDone = '';
   /** Directions (bitmask of axes) the tip has finished for its current light. */
   private tipFinished = 0;
+  /**
+   * The coach (ben, 2026-11-16: the how-to list "means nothing without seeing the actual
+   * controls"): the first time a scene needs a control, a yellow ring pulses around the
+   * real thing (an iPad button, the shots, the phone, a light on set) and the iPad's tip
+   * line says what to do with it. Each lesson is taught once per visit.
+   */
+  private coachRing = new CoachRing();
+  private coachLearned = new Set<CoachSkill>();
+  private coachStep: CoachLesson | null = null;
+  private coachTime = 0;
+  private coachFixture?: Fixture;
+  private coachStart = new Vector3();
+  private coachDimmers: number[] = [];
+  private coachStarts: Vector3[] = [];
+  private coachOnCount = 0;
+  private coachOrbit = { yaw: 0, pitch: 0, radius: 0 };
+  private coachPinned = false;
+  private coachBox = new Box3();
   private lensWorld = new Vector3();
   private headWorld = new Vector3();
   private hudTarget = new Vector3();
@@ -645,6 +669,7 @@ export class LightingLevelSystem extends createSystem({
       this.creature.update(delta);
       this.updateTake(delta);
       this.updateScore(delta);
+      this.updateCoach(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
       // Texts about the house lights dim once they're off (and brighten again if they go back on).
@@ -834,6 +859,9 @@ export class LightingLevelSystem extends createSystem({
             ctx.putImageData(image, 0, 0);
             return canvas.toDataURL('image/png');
           },
+          // The coach's current lesson: which control, what the tip line says, and whether its ring shows.
+          coach: () => (this.coachStep ? { skill: this.coachStep.skill, text: this.coachStep.text, ring: this.coachRing.mesh.visible } : null),
+          coachLearned: () => [...this.coachLearned],
           zoom: () => this.ipadZoom,
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
@@ -928,6 +956,7 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
+    this.endCoachStep(false);
     // New scene: the last scene's texts dim; this scene's notes arrive bright.
     this.phone.setStep(`scene:${index}`);
     this.takeTime = -1;
@@ -1455,19 +1484,12 @@ export class LightingLevelSystem extends createSystem({
         : 'Lucky Break · How to play',
       title: 'Twelve years as Background Extra #47.',
       body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
-      steps: headset
-        ? [
-            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
-            'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
-            'Pinch and hold a light to move it. Switch one on to see which it is.',
-            'The director talks from the set. Dee texts you tips: tap the phone to keep it up.',
-          ]
-        : [
-            'Make YOUR SHOT on this iPad match the director\'s TARGET.',
-            'Switch lights (and HOUSE) on and off with the buttons on this iPad.',
-            'Drag a light to move it. Shift-drag (or scroll while dragging) to raise it.',
-            'Drag empty space to turn the set. Click the phone to keep Dee\'s texts up.',
-          ],
+      // No list of controls up front (ben, 2026-11-16: it "means nothing without seeing the
+      // actual controls"). The coach rings each one, on the iPad or on set, when it's needed.
+      steps: [
+        'Make YOUR SHOT on this iPad match the director\'s TARGET.',
+        'Each control lights up in yellow, here or on set, the first time you need it.',
+      ],
       footer: IS_RESULT && !this.xrStatus
         ? 'RESULT BETA: one scene, judged only by how your shot looks. Any lights, anywhere. No bar.'
         : IS_BETA && !this.xrStatus
@@ -2841,6 +2863,259 @@ export class LightingLevelSystem extends createSystem({
       anchor.add(placeholder);
     }
     this.director = { anchor, placeholder };
+  }
+
+  // --- The coach ------------------------------------------------------------
+
+  /** Runs the coach: picks the next lesson this scene needs, rings its control, and checks it's done. */
+  private updateCoach(delta: number): void {
+    this.coachRing.update(delta);
+    if (this.phase !== 'playing' || this.ipad.isFull) {
+      this.endCoachStep(false);
+      return;
+    }
+    if (!this.coachStep) {
+      const skill = COACH_SKILLS.find((s) => !this.coachLearned.has(s) && this.coachNeeded(s));
+      if (!skill) return;
+      this.beginCoachStep(skill);
+      if (!this.coachStep) return;
+    }
+    const step = this.coachStep as CoachLesson;
+    this.coachTime += delta;
+    if (this.coachDone(step.skill)) {
+      devLog(`coach: ${step.skill} learned`);
+      this.coachLearned.add(step.skill);
+      this.endCoachStep(true);
+      return;
+    }
+    this.aimCoachRing(step.skill);
+  }
+
+  /** Does this scene need this lesson (it has the control, and the player has something to do with it)? */
+  private coachNeeded(skill: CoachSkill): boolean {
+    const movable = !this.level.locked && this.fixtures.some((f) => !SHAPERS.has(f.item.kind));
+    switch (skill) {
+      case 'shots':
+        return !IS_RESULT;
+      case 'house':
+        return this.houseOn && !this.level.outdoor;
+      case 'look':
+        return !this.immersive;
+      case 'switch':
+        return this.fixtures.some((f) => !SHAPERS.has(f.item.kind) && !f.on) && this.coachSwitchFixture() !== undefined;
+      case 'drag':
+      case 'raise':
+        return movable;
+      case 'dimmer':
+        return this.coachDimmerFixture() !== undefined;
+      case 'phone':
+        return this.phone.mesh.visible && this.phone.awake && !this.phone.pinned;
+    }
+  }
+
+  private beginCoachStep(skill: CoachSkill): void {
+    const vr = this.immersive;
+    const press = vr ? 'Point at' : 'Click';
+    const trigger = vr ? ' and pull the trigger' : '';
+    let text = '';
+    this.coachFixture = undefined;
+    switch (skill) {
+      case 'shots':
+        text = "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match.";
+        break;
+      case 'house':
+        text = `${press} HOUSE${trigger} to switch off the house lights.`;
+        break;
+      case 'look':
+        text = 'Drag empty space to walk around the set. Scroll to zoom.';
+        break;
+      case 'switch': {
+        const fixture = this.coachSwitchFixture()!;
+        this.coachFixture = fixture;
+        text = `${press} ${KIND_LABELS[fixture.item.kind]}${trigger} to switch that light on.`;
+        break;
+      }
+      case 'drag':
+        this.coachFixture = this.coachMoveFixture();
+        text = vr ? 'Point at the ringed light, hold the trigger and move your hand.' : 'Drag the ringed light to move it across the floor.';
+        break;
+      case 'raise':
+        this.coachFixture = this.coachMoveFixture();
+        text = vr ? 'Holding the trigger, lift your hand to raise the light.' : 'Hold Shift and drag up (or scroll while dragging) to raise it.';
+        break;
+      case 'dimmer': {
+        const found = this.coachDimmerFixture()!;
+        this.coachFixture = found.fixture;
+        const brighter = found.want > found.fixture.dimmer;
+        const name = KIND_LABELS[found.fixture.item.kind];
+        // The blind track never says which way: matching by eye is the game there.
+        if (IS_BETA) {
+          text = `${press} ◀ or ▶ on the ${name}${trigger} to dim it or brighten it.`;
+          break;
+        }
+        text = `${press} ${brighter ? '▶' : '◀'} on the ${KIND_LABELS[found.fixture.item.kind]}${trigger} to make it ${brighter ? 'brighter' : 'dimmer'}.`;
+        break;
+      }
+      case 'phone':
+        text = vr ? 'Dee texts you why. Point at the phone and pull the trigger to keep it up.' : 'Dee texts you why. Click the phone to keep it up.';
+        break;
+    }
+    this.coachStep = { skill, text };
+    this.coachTime = 0;
+    if (this.coachFixture) this.coachStart.copy(this.coachFixture.local);
+    this.coachDimmers = this.fixtures.map((f) => f.dimmer);
+    this.coachStarts = this.fixtures.map((f) => f.local.clone());
+    this.coachOnCount = this.fixtures.filter((f) => f.on).length;
+    this.coachOrbit.yaw = this.orbit.yaw;
+    this.coachOrbit.pitch = this.orbit.pitch;
+    this.coachOrbit.radius = this.orbit.radius;
+    this.coachPinned = this.phone.pinned;
+    this.ipad.setCoach(text);
+    devLog(`coach: ${skill}: ${text}`);
+  }
+
+  /** Has the player done what the lesson asks? Reading-only lessons time out. */
+  private coachDone(skill: CoachSkill): boolean {
+    const t = this.coachTime;
+    const f = this.coachFixture;
+    switch (skill) {
+      case 'shots':
+        return t > 7;
+      case 'house':
+        return !this.houseOn;
+      case 'look':
+        return (
+          Math.abs(this.orbit.yaw - this.coachOrbit.yaw) > 0.3 ||
+          Math.abs(this.orbit.pitch - this.coachOrbit.pitch) > 0.2 ||
+          Math.abs(this.orbit.radius - this.coachOrbit.radius) > 0.15 ||
+          t > 15
+        );
+      case 'switch':
+        return (f?.on ?? false) || this.fixtures.filter((x) => x.on).length > this.coachOnCount;
+      case 'drag':
+        // Any light moved counts: they found out how.
+        return this.fixtures.some((x, i) => {
+          const start = this.coachStarts[i];
+          return start !== undefined && Math.hypot(x.local.x - start.x, x.local.z - start.z) > 0.03;
+        });
+      case 'raise':
+        return f ? Math.abs(f.local.y - this.coachStart.y) > 0.015 : true;
+      case 'dimmer':
+        return this.fixtures.some((x, i) => x.dimmer !== this.coachDimmers[i]);
+      case 'phone':
+        return this.phone.pinned !== this.coachPinned || t > 10;
+    }
+  }
+
+  private endCoachStep(learned: boolean): void {
+    void learned;
+    this.coachStep = null;
+    this.coachFixture = undefined;
+    this.coachRing.hide();
+    this.ipad?.setCoach('');
+  }
+
+  /** Puts the ring on the lesson's control: an iPad button, the shots, the phone, or a light on set. */
+  private aimCoachRing(skill: CoachSkill): void {
+    const ring = this.coachRing;
+    const ipad = this.ipad;
+    const line = 0.002;
+    const onIpad = (frame: { x: number; y: number; w: number; h: number } | null, arrow = 0.011) => {
+      if (frame) ring.ring(ipad.object, frame.x, frame.y, frame.w, frame.h, line, false, arrow);
+      else ring.hide();
+    };
+    const button = (fixture: Fixture | 'house') => this.buttonTargets.indexOf(fixture);
+    switch (skill) {
+      case 'shots': {
+        // Both shots in one ring: they're the pair to compare.
+        const a = ipad.frameOf('target');
+        const b = ipad.frameOf('live');
+        if (a && b) onIpad({ x: (a.x + b.x) / 2, y: a.y, w: b.x - a.x + a.w, h: a.h }, 0);
+        break;
+      }
+      case 'house': {
+        const i = button('house');
+        onIpad(ipad.frameOf((c) => c.type === 'light' && c.index === i));
+        break;
+      }
+      case 'switch': {
+        const i = this.coachFixture ? button(this.coachFixture) : -1;
+        onIpad(ipad.frameOf((c) => c.type === 'light' && c.index === i));
+        break;
+      }
+      case 'dimmer': {
+        const f = this.coachFixture;
+        const i = f ? button(f) : -1;
+        const step = this.coachStep?.text.includes('▶') ? 'brighter' : 'dimmer';
+        const half = ipad.frameOf((c) => c.type === step && c.index === i);
+        // Just the arrow at the end of the dimmer, not its percentage.
+        const w = 0.013;
+        onIpad(half && { x: step === 'brighter' ? half.x + half.w / 2 - w / 2 : half.x - half.w / 2 + w / 2, y: half.y, w, h: half.h });
+        break;
+      }
+      case 'phone':
+        ring.ring(this.phone.mesh, 0, 0, PHONE_WIDTH, PHONE_HEIGHT, 0.0022);
+        break;
+      case 'drag':
+      case 'raise': {
+        const f = this.coachFixture;
+        if (!f) {
+          ring.hide();
+          break;
+        }
+        // An oval around the whole light, stand and all, facing you.
+        this.coachBox.setFromObject(f.object);
+        this.coachBox.getCenter(this.v5);
+        this.coachBox.getSize(this.v6);
+        const w = Math.max(this.v6.x, this.v6.z);
+        const h = this.v6.y;
+        ring.ring(this.world.scene, this.v5.x, this.v5.y, w * 1.15, h * 1.1, Math.max(w, h) * 0.03, true);
+        ring.mesh.position.z = this.v5.z;
+        this.world.camera.getWorldQuaternion(ring.mesh.quaternion);
+        break;
+      }
+      case 'look':
+        ring.hide();
+        break;
+    }
+  }
+
+  /** The light to switch on first: the one the first role needs, or any light that's off. */
+  private coachSwitchFixture(): Fixture | undefined {
+    const off = this.fixtures.filter((f) => !SHAPERS.has(f.item.kind) && !f.on);
+    const role = this.level.roles[0];
+    return off.find((f) => role?.kinds.includes(f.item.kind)) ?? off[0];
+  }
+
+  /** The light to move: the kicked one, or the one the tip is about, or the first light needed. */
+  private coachMoveFixture(): Fixture | undefined {
+    const kicked = this.level.preset?.find((p) => p.onFloor);
+    if (kicked) return this.fixtures[kicked.kit];
+    const tip = this.evaluate().fixture;
+    if (tip) return tip;
+    const role = this.level.roles[0];
+    return this.fixtures.find((f) => f.on && !SHAPERS.has(f.item.kind)) ?? this.fixtures.find((f) => role?.kinds.includes(f.item.kind));
+  }
+
+  /** The dimmer furthest from where it should be (if one is off by a stop or more). */
+  private coachDimmerFixture(): { fixture: Fixture; want: number } | undefined {
+    if (IS_BETA) {
+      const fixture = this.fixtures.find((f) => f.item.dimmer && this.buttonTargets.indexOf(f) >= 0);
+      return fixture ? { fixture, want: 1 } : undefined;
+    }
+    let best: { fixture: Fixture; want: number } | undefined;
+    let worst = 0.09;
+    for (const role of this.level.roles) {
+      if (role.level === undefined) continue;
+      const fixture = this.fixtures.find((f) => f.item.dimmer && role.kinds.includes(f.item.kind));
+      if (!fixture || this.buttonTargets.indexOf(fixture) < 0) continue;
+      const off = Math.abs(role.level - fixture.dimmer);
+      if (off > worst) {
+        worst = off;
+        best = { fixture, want: role.level };
+      }
+    }
+    return best;
   }
 
   /**
