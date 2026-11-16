@@ -137,6 +137,8 @@ const IN_FRAME_TEXT_SECONDS = 10;
 const NUDGE_SECONDS = 14;
 /** Dee only mentions the house lights once the player is this far into a scene. */
 const HOUSE_NUDGE_SECONDS = 20;
+/** How long the scene stays dark before the director's house lights come on (LevelDef.houseIntro). */
+const HOUSE_INTRO_SECONDS = 2.2;
 // Where the lower third and the phone ride in front of the headset view (meters, head space).
 // In the headset they sit about 85 cm out, near the lenses' focus distance and
 // the sharp middle of the view (first headset playtest: at 60 cm, low and off
@@ -394,6 +396,10 @@ export class LightingLevelSystem extends createSystem({
   /** The glowing undersides of the house light fixtures hanging from the grid. */
   private houseBulb?: MeshStandardMaterial;
   private switches: Switch[] = [];
+  /** The room's own light switch on the set's wall (scene 2's study): works the house lights too. */
+  private wallSwitch?: { switch: Switch; rocker: Object3D; pilot: MeshStandardMaterial };
+  /** When (performance.now() ms) the director hits the house lights at the start of a scene (LevelDef.houseIntro); -1 = not pending. */
+  private houseIntroIn = -1;
 
   // Camera shots and the monitor.
   private shotCamera!: PerspectiveCamera;
@@ -461,6 +467,8 @@ export class LightingLevelSystem extends createSystem({
   private houseEverOff = false;
   private sceneTime = 0;
   private houseTexts = 0;
+  /** Dee has texted about the house lights this scene (once per scene: ben saw it 5 times in a row). */
+  private houseNudged = false;
   /** Seconds the house lights have been on while lights were on the set, this scene. */
   private houseWork = 0;
 
@@ -639,7 +647,9 @@ export class LightingLevelSystem extends createSystem({
       this.updateScore(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
-      this.phone.update(delta);
+      // Texts about the house lights dim once they're off (and brighten again if they go back on).
+    this.phone.setResolved('house', !this.houseOn);
+    this.phone.update(delta);
       this.scrollPhoneWithThumbstick(delta);
       this.placeHud(delta);
       this.updateHoverTag();
@@ -710,6 +720,11 @@ export class LightingLevelSystem extends createSystem({
             return f ? this.fixtures.indexOf(f) : -1;
           },
           houseOn: () => this.houseOn,
+          // The room's wall switch (scene 2): its rocker (+ = up/on) and pilot glow, or null.
+          wallSwitch: () =>
+            this.wallSwitch
+              ? { rocker: this.wallSwitch.rocker.rotation.z, pilot: this.wallSwitch.pilot.emissiveIntensity, introPending: this.houseIntroIn >= 0 }
+              : null,
           setHouse: (on: boolean) => {
             this.houseOn = on;
           },
@@ -823,6 +838,7 @@ export class LightingLevelSystem extends createSystem({
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
           phoneVisible: () => this.phone.visibleTexts,
+          phoneBright: () => this.phone.brightTexts,
           levelDee: () => this.level.dee,
           ledOffset: () => {
             const wall = this.set?.getObjectByName('led-wall') as Mesh | undefined;
@@ -835,7 +851,7 @@ export class LightingLevelSystem extends createSystem({
           },
           hasObject: (name: string) => !!this.set?.getObjectByName(name),
           phoneScrolledBack: () => this.phone.scrolledBack,
-          dee: (text: string) => this.phone.text('dee', text),
+          dee: (text: string, topic?: string) => this.phone.text('dee', text, topic),
           clearPhone: () => this.phone.clear(),
           // How far (radians) the director has turned from his resting pose, e.g. to look at you.
           directorTurn: () => (this.directorModel ? this.directorModel.rotation.y - this.directorYaw : null),
@@ -883,6 +899,8 @@ export class LightingLevelSystem extends createSystem({
               this.ipad.object.localToWorld(v);
             } else if (what === 'phone') {
               this.phone.mesh.getWorldPosition(v);
+            } else if (what === 'wall-switch' && this.wallSwitch) {
+              this.wallSwitch.switch.hit.getWorldPosition(v);
             } else if (what === 'lamp' && this.practical) {
               this.practical.switch.hit.getWorldPosition(v);
             } else if (typeof what === 'number') {
@@ -910,12 +928,15 @@ export class LightingLevelSystem extends createSystem({
     this.level = LEVELS[index];
     const level = this.level;
     this.phase = 'playing';
+    // New scene: the last scene's texts dim; this scene's notes arrive bright.
+    this.phone.setStep(`scene:${index}`);
     this.takeTime = -1;
     this.directorLooking = false;
     this.houseOn = this.level.houseStartsOn ?? true;
     this.houseEverOff = !this.houseOn;
     this.sceneTime = 0;
     this.houseWork = 0;
+    this.houseNudged = false;
     this.holdTime = 0;
     this.inFrameTime = 0;
     this.inFrameTexted.clear();
@@ -1010,6 +1031,26 @@ export class LightingLevelSystem extends createSystem({
       };
       this.practical = practical;
     }
+
+    // The room's light switch on the wall, if this set has one: a second HOUSE switch.
+    const wall = this.set.getObjectByName('house-switch');
+    const rocker = wall?.getObjectByName('house-switch-rocker');
+    const pilot = wall?.getObjectByName('house-switch-pilot');
+    if (wall && rocker && pilot instanceof Mesh) {
+      this.stage.updateMatrixWorld(true);
+      wall.getWorldPosition(this.v1);
+      // The press target is a bit bigger than the plate, so it's easy to hit with a ray.
+      this.wallSwitch = {
+        switch: this.createSwitch(this.v1, 0.035, () => {
+          this.houseIntroIn = -1;
+          sfx.click();
+          this.toggleHouse();
+        }),
+        rocker,
+        pilot: pilot.material as MeshStandardMaterial,
+      };
+    }
+    this.houseIntroIn = -1;
 
     // The kit, parked in a row behind the tape.
     const n = level.kit.length;
@@ -1181,6 +1222,11 @@ export class LightingLevelSystem extends createSystem({
       this.removeSwitch(this.practical.switch);
       this.practical = undefined;
     }
+    if (this.wallSwitch) {
+      this.removeSwitch(this.wallSwitch.switch);
+      this.wallSwitch = undefined;
+    }
+    this.houseIntroIn = -1;
     if (this.set) {
       this.set.removeFromParent();
       disposeSet(this.set);
@@ -1339,6 +1385,19 @@ export class LightingLevelSystem extends createSystem({
    * looking at you, and back to the set otherwise; plays a line waiting on that turn.
    */
   private updateDirector(delta: number): void {
+    if (this.houseIntroIn >= 0) {
+      // Wall-clock time: the frame that loads a scene can take a second on its own,
+      // which would otherwise eat the dark beat before anyone sees it.
+      if (performance.now() >= this.houseIntroIn) {
+        // Somebody hits the switch by the door. Cutting them later is still the player's job.
+        this.houseIntroIn = -1;
+        this.houseOn = true;
+        this.houseEverOff = false;
+        sfx.click();
+        devLog('director hit the house lights');
+        this.resetHold();
+      }
+    }
     if (this.pendingLine) {
       this.pendingLine.wait -= delta;
       if (this.pendingLine.wait <= 0) {
@@ -1381,6 +1440,11 @@ export class LightingLevelSystem extends createSystem({
 
   private showTitleCard(): void {
     this.bubble.hide();
+    // The scene behind the title page waits dark; Go plays the director's lights-on beat.
+    if (this.level.houseIntro) {
+      this.houseIntroIn = -1;
+      this.houseOn = this.level.houseStartsOn ?? true;
+    }
     const headset = this.immersive;
     this.showPage({
       full: true,
@@ -1424,7 +1488,15 @@ export class LightingLevelSystem extends createSystem({
     const level = this.level;
     // The iPad shows only the shots and the tip; the director gives the brief from the set.
     this.showPage({ eyebrow: this.sceneLabel(), body: '' });
-    this.say(level.quote);
+    if (level.houseIntro && !this.houseOn) {
+      // The scene opens dark; the director calls for the lights and they come on
+      // (ben, 2026-11-16: the kicked key was hard to find in the dark).
+      this.say(level.houseIntro);
+      this.houseIntroIn = performance.now() + HOUSE_INTRO_SECONDS * 1000;
+      this.sayNext(level.quote);
+    } else {
+      this.say(level.quote);
+    }
     this.sayNext(level.objective);
   }
 
@@ -1514,6 +1586,7 @@ export class LightingLevelSystem extends createSystem({
 
   private rollFinale(): void {
     this.phase = 'rolled';
+    this.phone.setStep('finale');
     if (this.greenScreen) {
       const plate = paintLakeComo();
       this.greenScreen.material = new MeshBasicMaterial({ map: plate, toneMapped: false });
@@ -1613,6 +1686,11 @@ export class LightingLevelSystem extends createSystem({
     // The iPad's own controls are handled by its pointer listener (it needs the hit point).
 
     this.setHouseLights(this.houseOn);
+    if (this.wallSwitch) {
+      // Rocker up = on. The pilot glows while the lights are off, to find it in the dark.
+      this.wallSwitch.rocker.rotation.z = this.houseOn ? 0.22 : -0.22;
+      this.wallSwitch.pilot.emissiveIntensity = this.houseOn ? 0 : 6;
+    }
     if (this.practical) {
       this.practical.shade.emissiveIntensity = this.practical.on ? 1.4 : 0;
       this.practical.bulb.intensity = this.practical.on ? 0.06 : 0;
@@ -2525,13 +2603,16 @@ export class LightingLevelSystem extends createSystem({
         move = `${bestSign > 0 ? 'Raise' : 'Lower'} the ${lower}${bit}.`;
       }
     } else if (bestAxis === 0) {
-      move = `${verb} the ${lower}${bit} toward camera-${bestSign < 0 ? 'left' : 'right'}.`;
+      // ben, 2026-11-16: "camera-left" could mean frame left or the camera's own left, and
+      // "your left" breaks once you walk into the set. Name something on the set instead:
+      // the director sits on the -x side in every scene, craft services (the chef) on the +x side.
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} toward the director.` : `${verb} the ${lower}${bit} toward craft services.`;
     } else if (role.pos && role.aim === 'screen') {
       move = bestSign < 0 ? `${verb} the ${lower}${bit} closer to the screen.` : `Pull the ${lower}${bit} away from the screen.`;
     } else {
-      // Forward and back as the player sees the set from behind the camera (ben, round 9:
-      // "away from the camera" confused him when the light already stood beside it).
-      move = bestSign < 0 ? `${verb} the ${lower}${bit} back, deeper into the set.` : `${verb} the ${lower}${bit} forward, toward you.`;
+      // ben, 2026-11-16: "forward, toward you" breaks if you walked into the set. The film
+      // camera is in every scene and doesn't move, so measure from it.
+      move = bestSign < 0 ? `${verb} the ${lower}${bit} further from the camera.` : `${verb} the ${lower}${bit} closer to the camera.`;
     }
     return this.tipDone + move;
   }
@@ -2583,6 +2664,8 @@ export class LightingLevelSystem extends createSystem({
     this.holdTime = score >= this.level.winScore ? this.holdTime + delta : 0;
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
+      // The scene's notes and nudges are done: they dim, the win texts arrive bright.
+      this.phone.setStep(`won:${this.levelIndex}`);
       this.chime.play().catch(() => undefined);
       this.ipad.setStatus(score, '', true);
       // Tips still on their way are moot now (ben, round 11: tips kept coming after the win).
@@ -2606,33 +2689,40 @@ export class LightingLevelSystem extends createSystem({
   private updateNudges(delta: number, score: number, hint: string): void {
     const framed = this.framedFixture();
     this.inFrameTime = framed && framed === this.inFrameFixture ? this.inFrameTime + delta : 0;
+    if (framed !== this.inFrameFixture) {
+      // "the light is IN THE SHOT" dims once it's out of the shot, and brightens if it wanders back.
+      if (this.inFrameFixture) this.phone.setResolved(this.inFrameFixture, true);
+      if (framed) this.phone.setResolved(framed, false);
+    }
     this.inFrameFixture = framed;
     if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted.has(framed)) {
       this.inFrameTexted.add(framed);
-      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`);
+      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`, framed);
     }
     this.sinceNudge += delta;
     this.sceneTime += delta;
     // The quiet gotcha (LevelDef.houseHint 'ambient'): the tip only says "too much
     // ambient light"; after a while Dee comes to the rescue, once per scene.
-    if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && this.lastNudge !== `house:${this.levelIndex}`) {
-      this.lastNudge = `house:${this.levelIndex}`;
+    if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && !this.houseNudged) {
+      // Its own flag: lastNudge gets overwritten by the stuck-on-a-hint check below,
+      // which let this fire again every NUDGE_SECONDS (ben, 2026-11-16, car scene).
+      this.houseNudged = true;
       this.sinceNudge = 0;
-      this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱');
+      this.phone.text('dee', 'wait. THE HOUSE LIGHTS 😱', 'house');
     }
     // Time the house lights have been on while lights are on the set.
     if (this.houseOn && this.fixtures.some((f) => f.on)) this.houseWork += delta;
     if (this.houseOn && !this.houseEverOff && this.level.houseHint !== 'ambient' && this.houseWork > HOUSE_NUDGE_SECONDS) {
       // Only once the player has been placing lights a while with them still on.
-      if (this.sinceNudge > NUDGE_SECONDS && this.lastNudge !== `house:${this.levelIndex}`) {
-        this.lastNudge = `house:${this.levelIndex}`;
+      if (this.sinceNudge > NUDGE_SECONDS && !this.houseNudged) {
+        this.houseNudged = true;
         this.sinceNudge = 0;
         const text =
           this.houseTexts === 0
             ? 'the house lights are flattening everything. turn them off!'
             : ['psst... house lights...', "don't forget to cut the house lights 👀"][this.houseTexts % 2];
         this.houseTexts += 1;
-        this.phone.text('dee', text);
+        this.phone.text('dee', text, 'house');
       }
       this.lastHint = hint;
       return;

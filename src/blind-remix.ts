@@ -73,7 +73,7 @@ const REMIXES: Record<string, Remix> = {
     dee: [
       'key = the softbox. look at which side of his face is bright on the target',
       'back light = the Fresnel, high behind him on the opposite side from the key. a rim on his hair',
-      'place first, dim second. moving a light closer makes it brighter too',
+      'place first, dim second. then match how bright each side looks on the target',
     ],
   },
   product: {
@@ -101,7 +101,7 @@ const REMIXES: Record<string, Remix> = {
     objective: 'One hard light, high and behind him this time. Nothing else.',
     dee: [
       "one hard light. hard = sharp shadows. this time he's a silhouette with a glowing outline",
-      "low-key lighting: the dark does the storytelling. real ones hang from the grid, out of the shot",
+      "real ones hang from the grid. keep yours high and out of the shot or the take is ruined",
     ],
   },
   'beta-4-car': {

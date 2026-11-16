@@ -1,6 +1,6 @@
 // Plays every scene by doing exactly what the iPad tip says, like a new player would.
 // Each light starts knocked off its spot; the bot moves it 1.5 cm per step in the
-// direction the tip names (camera-left/right, back/forward, raise/lower) and counts
+// direction the tip names (toward the director/craft services, closer to/further from the camera, raise/lower) and counts
 // how many steps it takes to win and how often the tip reverses itself.
 // Greg's round-7 playtest: in scene 3 the tip flipped left/right/back/forward and he
 // "didn't know where to go". A reversal storm here is that bug.
@@ -29,10 +29,10 @@ const TRIALS = Number(process.env.TRIALS || 6);
       const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
       const out = [];
       const moves = [
-        [/camera-left/, 0, -1],
-        [/camera-right/, 0, 1],
-        [/back, deeper into the set|round the back/, 2, -1],
-        [/forward, toward you/, 2, 1],
+        [/toward the director/, 0, -1],
+        [/toward craft services/, 0, 1],
+        [/further from the camera|round the back/, 2, -1],
+        [/closer to the camera/, 2, 1],
         [/Raise/, 1, 1],
         [/Lower/, 1, -1],
         [/closer to the screen/, 2, -1],

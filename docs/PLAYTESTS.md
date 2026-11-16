@@ -3,6 +3,12 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## Round 12: 2026-11-16 (ben, scene 2, desktop browser)
+
+| ben said | Status |
+|---|---|
+| "the start of this scene is hard to see the key light on the ground... have the house lights start on for this level... maybe the director can even get up and turn the house lights on? a switch on the wall would be cool for that." | **Done 2026-11-16.** The study has a real light switch on the camera-left wall, nearest the director (cream plate, rocker flips, amber pilot glows while the lights are off). Scene 2 opens dark for about two seconds, the director says "Who killed the lights? I can't see a thing in here." and the house lights come on with a click, so the kicked key is easy to spot. The player can flip the wall switch (or HOUSE on the iPad) any time. House lights still halve the match and block the take, same as every scene: cut them when you want to roll. The director doesn't walk to the switch (no walking animation for the crew models yet). |
+
 ## Round 11: 2026-11-03 (ben, main playthrough, desktop browser)
 
 | ben said | Status |

@@ -146,8 +146,17 @@ const { chromium } = require('playwright');
   await wait(1500);
   const s2 = await state();
   const on2 = await api(() => window.lightLab.fixtures().filter((f) => f.on).length);
-  check('scene 2 starts with three lights up, house off, key flagged', on2 === 3 && !(await api(() => window.lightLab.houseOn())) && /key/i.test(s2.hint), { on2, s2 });
+  check('scene 2 starts with three lights up, key flagged', on2 === 3 && /key/i.test(s2.hint), { on2, s2 });
+  // ben, 2026-11-16: it opens dark, then the director hits the house lights so you can find the kicked key.
+  await page.waitForFunction(() => window.lightLab.houseOn(), null, { timeout: 10000 }).catch(() => {});
+  const sw2 = await api(() => window.lightLab.wallSwitch());
+  check('scene 2: the director turns the house lights on, rocker up', (await api(() => window.lightLab.houseOn())) && sw2 && sw2.rocker > 0, sw2);
   await page.screenshot({ path: `${out}/07-scene2-start.png` });
+  // The switch on the study wall cuts them (a mouse click on it, as a player would).
+  const swPt = await api(() => window.lightLab.screenOf('wall-switch'));
+  await page.mouse.click(swPt.x, swPt.y);
+  await wait(400);
+  check('scene 2: the wall switch cuts the house lights', !(await api(() => window.lightLab.houseOn())), swPt);
   await api(() => window.lightLab.place(0, -45, 30, 0.16));
   await wait(2500);
   const s2b = await state();
@@ -167,7 +176,7 @@ const { chromium } = require('playwright');
   await api((i) => window.lightLab.placeAt(i, -0.06, 0.2, -0.14), back7);
   await wait(600);
   const h2 = (await state()).hint;
-  check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /camera-right|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
+  check('back-light hints use plain moves (no "swing")', !/swing/i.test(h1 + h2) && /craft services|raise|grid/i.test(h1 + ' ' + h2), { h1, h2 });
 
   // 7. The director's lines come from the set; Mom arrives as a banner, not in Dee's chat.
   await api(() => window.lightLab.loadLevelId('sunset'));
