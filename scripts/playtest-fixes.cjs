@@ -93,7 +93,8 @@ const { chromium } = require('playwright');
     const s = await state();
     await wait(2500);
     const after = await state();
-    check(`scene ${i + 1} solution has nothing in frame and wins`, s.inFrame === null && after.phase === 'won', { inFrame: s.inFrame, after });
+    // (The last scene rolls its finale by itself a few seconds after the match: 'rolled'.)
+    check(`scene ${i + 1} solution has nothing in frame and wins`, s.inFrame === null && ['won', 'rolled'].includes(after.phase), { inFrame: s.inFrame, after });
     const placement = await api(() => window.lightLab.placement());
     check(`scene ${i + 1} (${ids[i]}): nothing placed unrealistically`, placement.length === 0, placement);
   }
@@ -161,8 +162,11 @@ const { chromium } = require('playwright');
   await wait(2500);
   const s2b = await state();
   check('scene 2: fixing the key wins', s2b.phase === 'won', s2b);
-  await page.screenshot({ path: `${out}/08-scene2-won.png` });
+  // He turns to you first, then speaks; read the line before the screenshot (in software
+  // rendering a screenshot stalls for seconds of game time, past his line and into the take).
+  await page.waitForFunction(() => typeof window.lightLab.bubble() === 'string', null, { polling: 'raf', timeout: 8000 }).catch(() => {});
   const line = await api(() => window.lightLab.bubble());
+  await page.screenshot({ path: `${out}/08-scene2-won.png` });
   check('win line comes from the director, on set', typeof line === 'string' && line.startsWith('"'), line);
 
   // Round 2. 6. Hints for lights behind the cast say plain moves, not "swing".
@@ -243,7 +247,9 @@ const { chromium } = require('playwright');
   await wait(1500);
   const turn0 = await api(() => window.lightLab.directorTurn());
   await api(() => window.lightLab.solve());
-  await wait(4000);
+  // Waits for the line itself: the take now rolls by itself a few seconds after it.
+  await page.waitForFunction(() => /Stick around/.test(window.lightLab.bubble() ?? ''), null, { timeout: 15000 }).catch(() => {});
+  await wait(300);
   const turn1 = await api(() => window.lightLab.directorTurn());
   const line1 = await api(() => window.lightLab.bubble());
   await page.screenshot({ path: `${out}/13-director-looks.png` });
@@ -306,17 +312,60 @@ const { chromium } = require('playwright');
   check('the director wobbles while he talks', (wob ?? 0) > 0.002 || (await api(() => window.lightLab.directorWobble())) > 0.002, { wob });
   check("the director's chair turns with him", chairTurn !== null && Math.abs(chairTurn - modelTurn) < 0.01 && Math.abs(chairTurn) > 0.3, { chairTurn, modelTurn });
 
-  // Round 10. Every win has a Roll: action, then Cut and Next scene.
+  // Round 10 + 2026-11-16. Every win has a take, and it rolls by itself: no Roll button.
   const before = await state();
-  check('win button says Roll', (await api(() => window.lightLab.card())).button === 'Roll', await api(() => window.lightLab.card()));
-  await api(() => window.lightLab.pressCard());
-  await wait(2500);
+  check('a match shows no Roll button', !(await api(() => window.lightLab.card())).button, await api(() => window.lightLab.card()));
+  await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 });
+  await wait(2000);
   const rolling = await api(() => ({ take: window.lightLab.take(), card: window.lightLab.card(), sway: window.lightLab.castSway() }));
-  check('Roll starts the take: the cast talk, the iPad says Rolling', rolling.take > 0 && rolling.card.eyebrow === 'Rolling' && rolling.sway.some((v) => v > 0.002) && (await state()).index === before.index, rolling);
+  check('the director rolls by himself: the cast talk, the iPad says Rolling', rolling.take > 0 && rolling.card.eyebrow === 'Rolling' && rolling.sway.some((v) => v > 0.002) && (await state()).index === before.index, rolling);
   await page.screenshot({ path: `${out}/15-rolling.png` });
   await api(() => window.lightLab.finishTake());
   await wait(600);
   check('after Cut the button is Next scene', (await api(() => window.lightLab.card())).button === 'Next scene', await api(() => window.lightLab.card()));
+
+  // 2026-11-16 (ben): touching anything while they roll blows the take, acted out on set, then you go again.
+  await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
+  await wait(400);
+  await api(() => window.lightLab.solve());
+  await page.waitForFunction(() => window.lightLab.take() > 2, null, { timeout: 15000 });
+  const textsAtBlow = (await api(() => window.lightLab.texts())).length;
+  await api(() => window.lightLab.toggle('fresnel'));
+  await wait(300);
+  const blown = await api(() => ({ phase: window.lightLab.level().phase, take: window.lightLab.take(), bubble: window.lightLab.bubble(), card: window.lightLab.card() }));
+  check('touching a light mid-take: the director yells Cut, the take stops, back to playing', blown.phase === 'playing' && blown.take < 0 && /CUT/.test(blown.bubble ?? '') && !blown.card.button, blown);
+  await page.waitForFunction(() => window.lightLab.castBubble(), null, { polling: 'raf', timeout: 15000 }).catch(() => {});
+  const tantrum = await api(() => window.lightLab.castBubble());
+  check('the actor blows up over the ruined take', /Amateur|moment|real gaffer|LIGHTS/.test(tantrum ?? ''), { tantrum });
+  await page.waitForFunction(() => /Back to one/.test(window.lightLab.bubble() ?? ''), null, { timeout: 15000 }).catch(() => {});
+  check('the director resets for another go', /Back to one/.test((await api(() => window.lightLab.bubble())) ?? ''), await api(() => window.lightLab.bubble()));
+  // (A screenshot stalls swiftshader for seconds, and the bubbles run on game time: take it after the checks.)
+  await page.screenshot({ path: `${out}/15b-blown-take-reset.png` });
+  // Dee's text waits for the director to finish talking.
+  await page.waitForFunction((n) => window.lightLab.texts().slice(n).some((t) => /don't touch anything till Cut/.test(t)), textsAtBlow, { timeout: 20000 }).catch(() => {});
+  const blowTexts = (await api(() => window.lightLab.texts())).slice(textsAtBlow);
+  check("Dee warns you: hands off once they roll", blowTexts.some((t) => /don't touch anything till Cut/.test(t)), blowTexts);
+  await page.waitForFunction(() => !window.lightLab.castBubble(), null, { timeout: 15000 }).catch(() => {});
+  const textsBeforeRetry = (await api(() => window.lightLab.texts())).length;
+  await api(() => window.lightLab.solve());
+  await page.waitForFunction(() => window.lightLab.take() > 0.5, null, { timeout: 20000 });
+  const retryTexts = (await api(() => window.lightLab.texts())).slice(textsBeforeRetry);
+  check('matching again rolls again by itself, without repeating the win gossip', (await state()).phase === 'won' && retryTexts.length === 0, retryTexts);
+  await api(() => window.lightLab.finishTake());
+  await wait(600);
+  await api(() => window.lightLab.toggle('fresnel'));
+  await wait(300);
+  check('after Cut, touching a light is fine (the take is in the can)', (await state()).phase === 'won' && (await api(() => window.lightLab.card())).button === 'Next scene');
+  // Before "Action!" a touch only gets a warning, and the roll is called off.
+  await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
+  await wait(400);
+  await api(() => window.lightLab.solve());
+  await page.waitForFunction(() => window.lightLab.level().phase === 'won', null, { timeout: 15000 });
+  await wait(500);
+  await api(() => window.lightLab.toggle('fresnel'));
+  await wait(3500);
+  const early = await api(() => ({ phase: window.lightLab.level().phase, take: window.lightLab.take(), rollIn: window.lightLab.rollIn(), tantrum: window.lightLab.castBubble() }));
+  check('touching before Action: a warning, no roll, no tantrum', early.phase === 'playing' && early.take < 0 && early.rollIn < 0 && !early.tantrum, early);
 
   // Round 10. The overhead silk can't be brought down onto people.
   await api(() => window.lightLab.loadLevelId('beta-3-desert'));
@@ -373,7 +422,6 @@ const { chromium } = require('playwright');
   await api(() => window.lightLab.solve());
   await wait(3500);
   const off0 = await api(() => window.lightLab.ledOffset());
-  await api(() => window.lightLab.pressCard());
   await wait(3500);
   const off1 = await api(() => window.lightLab.ledOffset());
   check('the LED wall scrolls the reversed direction on Roll', off1 > off0, { off0, off1 });

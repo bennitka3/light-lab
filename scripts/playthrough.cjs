@@ -35,14 +35,15 @@ const { chromium } = require('playwright');
     await page.screenshot({ path: `${out}/${i + 1}-b-solved.png` });
     if (after.phase !== 'won') { log('  !! not won'); errors.push(`scene ${i + 1} not won`); }
     if (i < count - 1) {
-      // Roll: the take plays (cast talk, Cut), then Next scene.
-      await page.evaluate(() => window.lightLab.pressCard());
+      // The director rolls by himself (no Roll button): the take plays (cast talk, Cut), then Next scene.
+      await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 });
       await page.waitForTimeout(1500);
       log('  rolling, take', await page.evaluate(() => window.lightLab.take()));
       await page.evaluate(() => window.lightLab.finishTake());
       await page.waitForTimeout(500);
     }
-    await page.evaluate(() => window.lightLab.pressCard());
+    if (i < count - 1) await page.evaluate(() => window.lightLab.pressCard());
+    else await page.waitForFunction(() => window.lightLab.take() >= 0 || window.lightLab.level().phase === 'rolled', null, { timeout: 15000 });
     await page.waitForTimeout(1500);
   }
   log('after last press', await lv());

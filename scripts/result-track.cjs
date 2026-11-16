@@ -73,7 +73,7 @@ const { chromium } = require('playwright');
   check(alt !== null && alt.level !== key.level, `a different setup that looks the same wins (key closer, dimmer ${alt && alt.level} instead of ${key.level})`);
   // And it actually calls the take.
   await page.waitForTimeout(3000);
-  check((await ll('level')).phase === 'won', 'the take is called on that different setup');
+  check(['won', 'rolled'].includes((await ll('level')).phase), 'the take is called on that different setup');
   await page.screenshot({ path: `${out}/result-2-won-alt.png` });
   const shot = await ll('shotImage', ['live']);
   require('fs').writeFileSync(`${out}/result-2-won-alt-shot.png`, Buffer.from(shot.split(',')[1], 'base64'));
