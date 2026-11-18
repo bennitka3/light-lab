@@ -20,7 +20,8 @@ night's ten notes were each checked there. What the playthrough found:
 | Scene 1: the director said "set how bright each light is, then kill the house lights", the coach asks for the house lights first. | **Fixed.** "Kill the house lights, then set how bright each light is, and we'll roll." |
 | Scenes 3 and 8: "The back light is way too bright. Dim the Fresnel" while that light is still parked and the match reads 0%. | **Left.** It is last night's "a way-off dimmer first" fix working as written; changing the order again hours before submission isn't worth the risk. |
 | Tips keep fine-tuning one light to 95% before moving to the next, though a scene wins at 85%. | **Left.** A balance change; needs ben's feel check. |
-| The director's bubble is cut off at the left edge of the view until you turn your head. Title says "Lucky Break", Devpost says "Light Lab". | **Left for ben.** |
+| The director's bubble is cut off at the left edge of the view until you turn your head. | **Left for ben.** |
+| The title card said "Lucky Break · How to play" and the browser tab "light-lab", while Devpost, the video and the thumbnail all say "Light Lab". A judge who follows the link from the video lands on a different name. | **Fixed (5:40 AM pass).** The title card and the tab say "Light Lab". The credits keep "LUCKY BREAK" over "A film by ben, lit by you": it reads as the film you just lit. One line to revert if ben prefers the old name. |
 | Test bots: `beta-track.cjs` times out waiting for the take after the tutorial; `playtest-fixes.cjs` fails its phone-tuck and house-lights-at-start checks. | **Left.** All three fail the same way on `main` before this change (the bots are behind the last few nights' changes). Backlog: bring them up to date after the deadline. |
 
 ## 2026-11-18 (2 AM): last notes before the recording (ben, Quest 1 playthrough)

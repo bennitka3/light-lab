@@ -1756,10 +1756,10 @@ export class LightingLevelSystem extends createSystem({
     this.showPage({
       full: true,
       eyebrow: IS_BETA
-        ? `Lucky Break · Beta track${this.levelIndex > 0 ? ` · Starting at scene ${this.levelIndex + 1}` : ''}`
+        ? `Light Lab · Beta track${this.levelIndex > 0 ? ` · Starting at scene ${this.levelIndex + 1}` : ''}`
         : this.levelIndex > 0
-        ? `Lucky Break · Starting at scene ${this.levelIndex + 1}`
-        : 'Lucky Break · How to play',
+        ? `Light Lab · Starting at scene ${this.levelIndex + 1}`
+        : 'Light Lab · How to play',
       title: 'Six months as Background Extra #47.',
       body: 'Today is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       // No list of controls up front (ben, 2026-11-16: it "means nothing without seeing the
