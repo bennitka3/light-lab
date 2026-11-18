@@ -3,6 +3,17 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (late): the studio in front of you, bigger; plain VR (ben, Quest 1)
+
+ben: "the main studio should be right in front of you. and you should be closer, and it should
+feel bigger... the monitor... can be above your head." Headset only:
+- You start right at the open front of the set, eyes just over its floor, facing it, and the
+  set looks 1.6x bigger (you are scaled down, so the lights and shadows score exactly the same).
+  This replaces raising the set.
+- The sign hangs above the set, over your head, angled down at you.
+- Plain VR (no passthrough) is now the default, with the dark studio backdrop around you;
+  passthrough is the fallback if VR won't start.
+
 ## 2026-11-18 (night): sticky tips, a halo on the light, eye level (ben, Quest 1)
 
 - Following the tips meant key +, fill -, key +, fill -... one click at a time. The dimmer tip
