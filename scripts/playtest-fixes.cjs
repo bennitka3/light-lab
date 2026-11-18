@@ -40,7 +40,11 @@ const { chromium } = require('playwright');
   // director to finish his two opening lines. So give it longer.
   await wait(22000);
   const texts = await api(() => window.lightLab.texts());
-  check('Dee texts the intro and a tip', texts.length >= 3 && texts[0].startsWith('dee:'), texts);
+  // 2026-11-17: one intro text from Dee, not five; the coach on the iPad teaches.
+  check('Dee texts one intro', texts.filter((t) => t.startsWith('dee:')).length === 1, texts);
+  // The rest of this test moves lights through the API, so the coach would never finish
+  // (and the director waits for it): mark every lesson learned.
+  await api(() => window.lightLab.learnAll());
   await page.screenshot({ path: `${out}/02-scene1-phone.png` });
 
   // Round 4. Light switches on the iPad: HOUSE and each light, labeled; hover outlines the switch.
@@ -388,7 +392,8 @@ const { chromium } = require('playwright');
     await page
       .waitForFunction(([n, last]) => window.lightLab.texts().slice(n).includes(`dee: ${last}`), [sent, note[note.length - 1]], { timeout: 120000 })
       .catch(() => {});
-    await wait(1500);
+    // A single short text takes a moment to slide up after it lands.
+    await page.waitForFunction((last) => window.lightLab.phoneVisible().includes(last), note[0], { timeout: 10000 }).catch(() => {});
     const shown = await api(() => window.lightLab.phoneVisible());
     check(`scene ${id}: Dee's note fits on the phone`, note.every((l) => shown.includes(l)), { note, shown });
     check(`scene ${id}: Dee's notes don't give button instructions`, !lines.some((l) => /\b(tap|iPad|button|click|drag)\b/i.test(l)), lines);

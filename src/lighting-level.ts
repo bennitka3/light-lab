@@ -977,6 +977,9 @@ export class LightingLevelSystem extends createSystem({
           // The coach's current lesson: which control, what the tip line says, and whether its ring shows.
           coach: () => (this.coachStep ? { skill: this.coachStep.skill, text: this.coachStep.text, ring: this.coachRing.mesh.visible } : null),
           coachLearned: () => [...this.coachLearned],
+          // Tests that drive the game through this API (not the controls) skip the coach, so the
+          // director gives his brief right away.
+          learnAll: () => COACH_SKILLS.forEach((s) => this.coachLearned.add(s)),
           zoom: () => this.ipadZoom,
           ipadScale: () => this.ipad.object.scale.x,
           phonePinned: () => this.phone.pinned,
@@ -1643,6 +1646,11 @@ export class LightingLevelSystem extends createSystem({
     // you're going through the walkthrough of the iPad is kind of a lot"). While the coach
     // has something to teach, the director keeps quiet; his brief comes once it's done.
     const coaching = this.coachHasLesson();
+    // The last scene's line doesn't linger over this one while he waits.
+    if (coaching) {
+      this.bubble.hide();
+      this.pendingLine = null;
+    }
     if (level.houseIntro && !this.houseOn) {
       // The scene opens dark and somebody hits the lights (ben, 2026-11-16: the kicked key
       // was hard to find in the dark). The director only grumbles about it if nobody's teaching.
@@ -1650,14 +1658,16 @@ export class LightingLevelSystem extends createSystem({
       this.houseIntroIn = performance.now() + HOUSE_INTRO_SECONDS * 1000;
     }
     this.briefPending = true;
-    if (!coaching) this.giveBrief();
+    // Straight after his lights-on line, or over whatever the last scene left in his bubble.
+    if (!coaching) this.giveBrief(level.houseIntro && this.houseIntroIn >= 0 ? 'after' : 'replace');
   }
 
   /** The director's brief: the scene's quote, then what to do. */
-  private giveBrief(): void {
+  private giveBrief(how: 'after' | 'replace' | 'wait' = 'wait'): void {
     if (!this.briefPending) return;
     this.briefPending = false;
-    if (this.bubble.speaking || this.pendingLine) this.sayNext(this.level.quote);
+    // 'after' his lights-on line; 'replace' a line the last scene left; 'wait' for one he's saying now.
+    if (how === 'after' || (how === 'wait' && (this.bubble.speaking || this.pendingLine))) this.sayNext(this.level.quote);
     else this.say(this.level.quote);
     this.sayNext(this.level.objective);
   }
