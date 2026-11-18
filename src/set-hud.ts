@@ -95,11 +95,17 @@ export class ShotSign {
     targetPlane.position.set(leftX, shotY, 0.001);
     const livePlane = new Mesh(new PlaneGeometry(SIGN_SHOT_W, this.shotH), live);
     livePlane.position.set(rightX, shotY, 0.001);
+    // The face is see-through at its rounded corners, so it sorts with the other see-through
+    // layers; draw it first, always (sorted by distance, it sometimes covered your shot).
+    face.mesh.renderOrder = 0;
+    targetPlane.renderOrder = 1;
+    livePlane.renderOrder = 1;
     this.group.add(targetPlane, livePlane);
     this.targetFrame = { x: leftX, y: shotY, w: SIGN_SHOT_W, h: this.shotH };
     this.liveFrame = { x: rightX, y: shotY, w: SIGN_SHOT_W, h: this.shotH };
     this.label = canvasPlane(this.width - 2 * SIGN_PAD, SIGN_LABEL_H, 'shot-sign-label');
     this.label.mesh.position.set(0, this.height / 2 - SIGN_PAD / 2 - SIGN_LABEL_H / 2, 0.001);
+    this.label.mesh.renderOrder = 1;
     this.group.add(this.label.mesh);
     for (const child of this.group.children) (child as unknown as { pointerEvents: string }).pointerEvents = 'none';
     this.setLabels('TARGET', 'YOUR SHOT', '#ffffff');
@@ -213,7 +219,7 @@ export class EdgeStrip {
     }
     if (s.button) {
       const w = m(NEXT_W);
-      button(right - w, w, `${s.button} ▶`, YELLOW, '#18181b', 'next');
+      button(right - w, w, s.button, YELLOW, '#18181b', 'next');
       right -= w + pad;
     }
     // The match bar along the top, the line under it.
@@ -337,8 +343,10 @@ export class LightPanel {
       const arrow = m(0.017);
       ctx.fillStyle = YELLOW;
       ctx.font = `bold ${m(0.013)}px system-ui, sans-serif`;
-      ctx.fillText('◀', x + m(0.004), H / 2);
-      ctx.fillText('▶', x + sw - arrow + m(0.003), H / 2);
+      // Plain - and + (some headset browsers draw ◀ ▶ as empty boxes).
+      ctx.font = `bold ${m(0.017)}px system-ui, sans-serif`;
+      ctx.fillText('-', x + m(0.006), H / 2);
+      ctx.fillText('+', x + sw - arrow + m(0.002), H / 2);
       ctx.fillStyle = color;
       ctx.font = `bold ${m(0.0105)}px system-ui, sans-serif`;
       ctx.fillText(value, x + (sw - ctx.measureText(value).width) / 2, H / 2);
