@@ -1971,8 +1971,9 @@ export class LightingLevelSystem extends createSystem({
     }
     if (before < TAKE_SECONDS && this.takeTime >= TAKE_SECONDS && this.phase === 'won') {
       this.say('"...CUT! That\'s a print. Moving on."');
-      // The button stays as a skip; the next scene loads by itself a beat later.
-      this.showPage({ eyebrow: this.sceneLabel(), body: '', button: 'Next scene' });
+      // No Next scene button (ben, 2026-11-18: redundant): the next scene loads by itself a beat
+      // later. Tests that hold the scene (setAutoNext(false)) get the button back.
+      this.showPage({ eyebrow: this.sceneLabel(), body: '', button: this.autoNext ? undefined : 'Next scene' });
       this.nextIn = this.autoNext ? AUTO_NEXT_SECONDS : -1;
     }
     if (this.nextIn > 0 && this.phase === 'won') {
@@ -1980,7 +1981,8 @@ export class LightingLevelSystem extends createSystem({
       if (this.nextIn <= 0) {
         this.nextIn = -1;
         devLog('next scene by itself after Cut');
-        this.pressCard();
+        this.loadLevel(this.levelIndex + 1);
+        this.textDee();
       }
     }
   }

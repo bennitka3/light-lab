@@ -27,6 +27,7 @@ ideas stay here as the backlog until ben picks them up.
 | ben's note | Status |
 | --- | --- |
 | "you shouldn't have to click next scene... you should automatically be moved to the next scene." | **Done.** 4 s after "Cut! That's a print" the next scene loads by itself. The Next scene button stays as a skip. |
+| "some buttons were also redundant... like next scene" | **Done:** no Next scene button after Cut; the next scene loads by itself. |
 | "the tutorial steps should be click through so you can indicate once you've read them." | **Done** for the one lesson that's only reading (the two shots): it waits for a **Got it** button (pinch it on the strip in the headset, click it on the iPad) instead of a 7 s timer. The other lessons already finish when you do the thing they ask. |
 | Sign "a little TOO high above us", scoot it back and size it down. | **Mocked up, waiting on ben:** on the back wall, 90%, bottom just clear of the grid's front edge. |
 | Hints as arrows showing where to move one light at a time. | **Mocked up, waiting on ben:** yellow arrow on the tip's light, pointing the tip's direction. |
