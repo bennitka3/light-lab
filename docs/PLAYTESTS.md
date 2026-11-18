@@ -3,6 +3,17 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (later): first Quest run of the sign (ben, headset, Quest 1)
+
+- YOUR SHOT on the sign was blank about half the time: the sign's see-through face sometimes
+  sorted in front of it. The face now always draws first.
+- The match bar and tip moved back right under the shots, on the sign (between it and the
+  stage's grid), instead of on the stage's front lip.
+- The power-symbol glyph showed as an empty box on Quest: the panel's switch is the light's name
+  with an on/off dot, and its dimmer/color arrows are plain - and +.
+- Pinching a light only moves it; the floating switch is the only on/off in the headset.
+- "Pull the trigger" is now "pinch" (judges play with hands only; a trigger pull still works).
+
 ## 2026-11-18: look at the set, not a screen (ben, headset)
 
 ben: "I keep looking at those controls instead of at my actual light setup... the whole goal of

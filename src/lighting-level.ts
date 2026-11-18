@@ -67,7 +67,7 @@ import {
   type LightButton,
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
-import { EdgeStrip, LightPanel, PANEL_H, STRIP_H, ShotSign, type PanelControl } from './set-hud.js';
+import { EdgeStrip, LightPanel, PANEL_H, STRIP_H, STRIP_W, ShotSign, type PanelControl } from './set-hud.js';
 import * as sfx from './sfx.js';
 import { checkPlacement, localBox } from './placement-check.js';
 
@@ -174,19 +174,13 @@ const HUD_PHONE_AWAKE_XR_SCALE = 2.3;
 const HUD_DESKTOP_DISTANCE = 0.6;
 // Headset (ben, 2026-11-18: "the whole goal of this is to focus on what you're actually doing
 // and not on the monitor"): no iPad in play. The target and your shot hang on a sign above the
-// front of the stage like a storefront sign, the match bar and tip run along the tape at the
-// front of the set, and each light's controls float over it when you point at it. All fixed
+// front of the stage like a storefront sign, the match bar and tip run right under them, and
+// each light's controls float over it when you point at it. All fixed
 // to the set; nothing follows your head.
 /** Where you stand at the start, in the set's meters. */
 const START_SPOT = { x: 0, z: 0.55 };
 /** The sign's bottom edge sits this far above your sightline to the back of the set floor. */
 const SIGN_CLEAR = 0.025;
-/**
- * The strip runs along the stage's front lip (the edge of the apron), tipped up toward you. At
- * the tape it would sit behind the lights parked on the apron, which would cover it.
- */
-const STRIP_Z = STAGE_DEPTH / 2 + 0.225;
-const STRIP_TILT_DEG = 32;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
 const PHONE_SPOT = new Vector3(0.36, 0.004, 0.385);
 const PHONE_SPOT_SCALE = 0.7;
@@ -500,6 +494,8 @@ export class LightingLevelSystem extends createSystem({
   private dockQuatTmp = new Quaternion();
   /** A hand's ray is on the light panel (it stays up while you use it). */
   private panelHot = false;
+  /** Where the strip sits on the sign (the sign's own meters). */
+  private stripOnSign = new Vector3();
   /** The sign over the front of the stage (target + your shot) and its own copy of the live picture. */
   private sign?: ShotSign;
   /** The sign's center and facing in world space (full pages show the iPad there). */
@@ -1018,7 +1014,7 @@ export class LightingLevelSystem extends createSystem({
           onSet: () => ({
             ready: this.dockReady,
             sign: this.sign ? this.sign.group.position.toArray() : null,
-            strip: this.strip ? this.strip.mesh.position.toArray() : null,
+            strip: this.strip ? this.strip.mesh.getWorldPosition(new Vector3()).toArray() : null,
             panel: this.panel?.group.visible && this.panelFixture ? { light: KIND_LABELS[this.panelFixture.item.kind], at: this.panel.group.getWorldPosition(new Vector3()).toArray(), linger: this.panelLinger } : null,
             phase: this.phase,
           }),
@@ -2198,8 +2194,9 @@ export class LightingLevelSystem extends createSystem({
       }
     } else if (fixture.grabTime > 0) {
       devLog(`light ${fixture.item.kind} released after ${fixture.grabTime.toFixed(2)} s, moved ${fixture.local.distanceTo(fixture.grabStart).toFixed(3)} m`);
-      // A quick press or pinch that barely moved the light is a tap on its switch.
-      if (fixture.grabTime < TAP_SECONDS && fixture.local.distanceTo(fixture.grabStart) < TAP_MAX_MOVE) {
+      // A quick press or pinch that barely moved the light is a tap on its switch. Not in the
+      // headset: there the switch floats over the light, and pinching a light only moves it (ben).
+      if (!this.dockReady && fixture.grabTime < TAP_SECONDS && fixture.local.distanceTo(fixture.grabStart) < TAP_MAX_MOVE) {
         fixture.local.copy(fixture.grabStart);
         this.toggle(fixture);
       }
@@ -2648,7 +2645,7 @@ export class LightingLevelSystem extends createSystem({
     // lights look right, and Dee mentions them only after they've stayed on a while
     // with lights placed (updateNudges).
     if (level.practical && !this.practical?.on) {
-      return { score: Math.min(score, 60), hint: this.dockReady ? 'The lamp in the shot is off. Point at the lamp on set and pull the trigger.' : 'The lamp in the shot is off. Tap Lamp on the iPad.' };
+      return { score: Math.min(score, 60), hint: this.dockReady ? 'The lamp in the shot is off. Point at the lamp on set and pinch.' : 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
     const missing = assigned.filter((a) => !a.fixture);
     if (missing.length > 0) {
@@ -2675,7 +2672,7 @@ export class LightingLevelSystem extends createSystem({
         return { score, hint: `Still missing: the ${role.label.toLowerCase()}. Drag ${role.kindHint} onto the set.` };
       }
       const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
-      return { score, hint: on.length === 0 ? (this.dockReady ? 'Point at a light, then at the ⏻ button over it, to switch it on.' : "Tap a light's button on the iPad to switch it on.") : `${label} Use ${role.kindHint}.` };
+      return { score, hint: on.length === 0 ? (this.dockReady ? 'Point at a light, then pinch its switch floating over it to turn it on.' : "Tap a light's button on the iPad to switch it on.") : `${label} Use ${role.kindHint}.` };
     }
     if (extras.length > 0) {
       score = Math.min(score, 70);
@@ -2739,8 +2736,8 @@ export class LightingLevelSystem extends createSystem({
     const lot = Math.abs(worstErr) >= 0.3 ? 'way ' : '';
     const where = this.dockReady ? 'over it' : 'on the iPad';
     return worstErr > 0
-      ? `The ${lower} is ${lot}too bright. Dim the ${name} (◀ ${where}).`
-      : `The ${lower} is ${lot}too dark. Bring the ${name} up (▶ ${where}).`;
+      ? `The ${lower} is ${lot}too bright. Dim the ${name} (${this.dockReady ? '-' : '◀'} ${where}).`
+      : `The ${lower} is ${lot}too dark. Bring the ${name} up (${this.dockReady ? '+' : '▶'} ${where}).`;
   }
 
   /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
@@ -3215,7 +3212,7 @@ export class LightingLevelSystem extends createSystem({
   private beginCoachStep(skill: CoachSkill): void {
     const vr = this.immersive;
     const press = vr ? 'Point at' : 'Click';
-    const trigger = vr ? ' and pull the trigger' : '';
+    const trigger = vr ? ' and pinch' : '';
     let text = '';
     this.coachFixture = undefined;
     switch (skill) {
@@ -3234,17 +3231,17 @@ export class LightingLevelSystem extends createSystem({
         const fixture = this.coachSwitchFixture()!;
         this.coachFixture = fixture;
         text = this.dockReady
-          ? `Point at the ⏻ button over the ${KIND_LABELS[fixture.item.kind]} and pull the trigger to switch it on.`
+          ? `Pinch the switch floating over the ${KIND_LABELS[fixture.item.kind]} to turn it on.`
           : `${press} ${KIND_LABELS[fixture.item.kind]}${trigger} to switch that light on.`;
         break;
       }
       case 'drag':
         this.coachFixture = this.coachMoveFixture();
-        text = vr ? 'Point at the ringed light, hold the trigger and move your hand.' : 'Drag the ringed light to move it across the floor.';
+        text = vr ? 'Point at the ringed light, pinch and hold, and move your hand.' : 'Drag the ringed light to move it across the floor.';
         break;
       case 'raise':
         this.coachFixture = this.coachMoveFixture();
-        text = vr ? 'Holding the trigger, lift your hand to raise the light.' : 'Hold Shift and drag up (or scroll while dragging) to raise it.';
+        text = vr ? 'Still pinching, lift your hand to raise the light.' : 'Hold Shift and drag up (or scroll while dragging) to raise it.';
         break;
       case 'dimmer': {
         const found = this.coachDimmerFixture()!;
@@ -3254,12 +3251,12 @@ export class LightingLevelSystem extends createSystem({
         // The blind track never says which way: matching by eye is the game there.
         if (IS_BETA) {
           text = this.dockReady
-            ? `Point at ◀ or ▶ over the ${name} and pull the trigger to dim it or brighten it.`
+            ? `Pinch - or + over the ${name} to dim it or brighten it.`
             : `${press} ◀ or ▶ on the ${name}${trigger} to dim it or brighten it.`;
           break;
         }
         text = this.dockReady
-          ? `Point at ${brighter ? '▶' : '◀'} over the ${name} and pull the trigger to make it ${brighter ? 'brighter' : 'dimmer'}.`
+          ? `Pinch ${brighter ? '+' : '-'} over the ${name} to make it ${brighter ? 'brighter' : 'dimmer'}.`
           : `${press} ${brighter ? '▶' : '◀'} on the ${name}${trigger} to make it ${brighter ? 'brighter' : 'dimmer'}.`;
         break;
       }
@@ -3267,8 +3264,8 @@ export class LightingLevelSystem extends createSystem({
         text = !vr
           ? 'Dee texts you why. Click the phone to keep it up.'
           : this.dockReady
-          ? 'Dee texted you. Point at the phone on the stage, toward craft services, and pull the trigger to pick it up.'
-          : 'Dee texts you why. Point at the phone and pull the trigger to keep it up.';
+          ? 'Dee texted you. Point at the phone on the stage, toward craft services, and pinch to pick it up.'
+          : 'Dee texts you why. Point at the phone and pinch to keep it up.';
         break;
     }
     this.coachStep = { skill, text };
@@ -3416,7 +3413,7 @@ export class LightingLevelSystem extends createSystem({
       }
     }
     if ((skill === 'switch' || skill === 'dimmer') && panel?.group.visible) {
-      const step = skill === 'switch' ? 'power' : this.coachStep?.text.includes('▶') ? 'brighter' : 'dimmer';
+      const step = skill === 'switch' ? 'power' : this.coachStep?.text.includes('brighter') ? 'brighter' : 'dimmer';
       const frame = panel.frameOf(step);
       if (frame) {
         const w = skill === 'switch' ? frame.w : 0.018;
@@ -3587,6 +3584,8 @@ export class LightingLevelSystem extends createSystem({
     const iPad = this.ipad;
     sign.group.visible = !full;
     strip.mesh.visible = !full && this.phase !== 'title';
+    sign.group.localToWorld(strip.mesh.position.copy(this.stripOnSign));
+    strip.mesh.quaternion.copy(this.signQuat);
     if (!full) {
       const won = iPad.isWon;
       sign.setLabels(
@@ -3764,11 +3763,14 @@ export class LightingLevelSystem extends createSystem({
     let sightY = STAGE_HEIGHT;
     if (local.z > front + 0.05) sightY = local.y + ((0 - local.y) * (local.z - front)) / (local.z - back);
     const bottom = MathUtils.clamp(sightY + SIGN_CLEAR, STAGE_HEIGHT + 0.05, Math.max(STAGE_HEIGHT + 0.05, local.y - 0.05));
+    // The strip (match bar and tip) hangs right under the shots, so the whole sign is taller.
+    const stripGap = 0.006;
+    const under = STRIP_H + stripGap;
+    const centerY = bottom + (under + sign.height) / 2;
     // Tipped back to face where you stand.
-    const centerY = bottom + sign.height / 2;
     const pitch = Math.atan2(local.y - centerY, Math.max(0.1, local.z - front));
     sign.group.rotation.set(-pitch, 0, 0);
-    this.v1.set(0, sign.height / 2, 0).applyEuler(sign.group.rotation);
+    this.v1.set(0, under + sign.height / 2, 0).applyEuler(sign.group.rotation);
     sign.group.position.set(0, bottom, front).add(this.v1);
     sign.group.visible = true;
     stage.add(sign.group);
@@ -3791,14 +3793,12 @@ export class LightingLevelSystem extends createSystem({
     sign.group.updateMatrixWorld(true);
     sign.group.getWorldPosition(this.signPos);
     sign.group.getWorldQuaternion(this.signQuat);
-    // The strip: on the stage's front lip, tipped up toward you, nearest of all to you (the
-    // lights parked by the tape would cover it there).
+    // The strip: on the sign, right under the shots.
     const strip = this.strip!;
-    const tilt = MathUtils.degToRad(STRIP_TILT_DEG);
-    strip.mesh.rotation.set(tilt - Math.PI / 2, 0, 0);
-    strip.mesh.position.set(0, 0.002 + (STRIP_H / 2) * Math.sin(tilt), STRIP_Z - (STRIP_H / 2) * Math.cos(tilt));
+    // (It's a pressable entity, kept under the level root, so it follows the sign each frame.)
+    this.stripOnSign.set(0, -sign.height / 2 - stripGap - STRIP_H / 2, 0.001);
+    strip.mesh.renderOrder = 1;
     strip.mesh.visible = this.phase !== 'title';
-    stage.add(strip.mesh);
     // The phone, lying tipped toward you on the apron's front corner.
     const lean = MathUtils.degToRad(72);
     this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
@@ -3858,8 +3858,9 @@ export class LightingLevelSystem extends createSystem({
     // The sign's live picture is the iPad's own (so the creature feature shows there too).
     const sign = new ShotSign(this.targetShot.texture, this.ipad.liveMaterial, 16 / 9);
     // A dark box behind the face, so it reads as a real sign.
-    const box = new Mesh(new BoxGeometry(sign.width + 0.01, sign.height + 0.01, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));
-    box.position.z = -0.0095;
+    const boxH = sign.height + STRIP_H + 0.006 + 0.01;
+    const box = new Mesh(new BoxGeometry(Math.max(sign.width, STRIP_W) + 0.01, boxH, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));
+    box.position.set(0, sign.height / 2 + 0.005 - boxH / 2, -0.0095);
     sign.group.add(box);
     this.sign = sign;
     const strip = new EdgeStrip();
