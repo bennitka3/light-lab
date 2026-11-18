@@ -3,6 +3,26 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18: look at the set, not a screen (ben, headset)
+
+ben: "I keep looking at those controls instead of at my actual light setup... the whole goal of
+this is to focus on what you're actually doing and not on the monitor." Headset only (the
+browser view is unchanged):
+
+- No iPad and no Video Village cart in play. The target and your shot hang on a sign over the
+  front of the stage, like a storefront sign. Its bottom edge sits just above your sightline to
+  the back of the set floor (worked out from your head at the start), so it never hides the set.
+  Full pages (title, credits) stand in the sign's place.
+- The match bar and the tip run along the stage's front lip, with HOUSE at one end and Next
+  scene at the other. It's on the lip, not at the tape, because the lights parked on the apron
+  would cover it there.
+- Point at a light and its controls float over it (switch, ◀ dimmer ▶, ◀ color ▶); they stay a
+  moment so you can move onto them. The coach rings the button on that panel.
+- The phone lies on the apron's front corner, toward craft services; point and pull the trigger
+  to pick it up, as before.
+- Not yet checked on a real Quest: hand tracking (pinch) on the panels and strip, and reading
+  the sign and strip text at real headset resolution.
+
 ## 2026-11-17: one teacher, a fixed monitor (ben, headset)
 
 | ben's note | Status |
