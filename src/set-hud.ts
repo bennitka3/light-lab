@@ -153,9 +153,13 @@ export type StripState = {
   house: boolean | null;
   /** "Next scene" and the like, when the take is in the can. */
   button?: string;
+  /** A light's name in the text to show in yellow (the first time a tip names it). */
+  highlight?: string;
+  /** Headset brightness step (0-based) to show with - and +, or undefined for none. */
+  bright?: number;
 };
 
-export type StripControl = 'house' | 'next';
+export type StripControl = 'house' | 'next' | 'darker' | 'brighter';
 
 /** The match bar and the tip, printed along the stage's front edge. */
 export class EdgeStrip {
@@ -173,7 +177,7 @@ export class EdgeStrip {
   }
 
   set(state: StripState): void {
-    const key = `${state.score}|${state.won}|${state.text}|${state.coaching}|${state.house}|${state.button ?? ''}`;
+    const key = `${state.score}|${state.won}|${state.text}|${state.coaching}|${state.house}|${state.button ?? ''}|${state.highlight ?? ''}|${state.bright ?? ''}`;
     if (key === this.key) return;
     this.key = key;
     this.draw(state);
@@ -222,6 +226,21 @@ export class EdgeStrip {
       button(right - w, w, s.button, YELLOW, '#18181b', 'next');
       right -= w + pad;
     }
+    if (s.bright !== undefined) {
+      // Brightness: - and + either side of its step.
+      const bw = m(0.03);
+      button(right - bw, bw, '+', '#e7e5e4', '#18181b', 'brighter');
+      right -= bw + pad;
+      ctx.font = `bold ${m(0.011)}px system-ui, sans-serif`;
+      const label = `BRIGHTNESS ${s.bright + 1}`;
+      const lw = ctx.measureText(label).width + m(0.008);
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, right - lw + m(0.004), H / 2);
+      right -= lw;
+      button(right - bw, bw, '-', '#e7e5e4', '#18181b', 'darker');
+      right -= bw + pad;
+    }
     // The match bar along the top, the line under it.
     const barW = right - left;
     if (s.score >= 0) {
@@ -244,9 +263,22 @@ export class EdgeStrip {
     }
     let line = s.text;
     while (ctx.measureText(line).width > textW && line.length > 4) line = `${line.slice(0, -2)}…`;
-    ctx.fillStyle = s.coaching ? YELLOW : '#ffffff';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(line, left, H - pad - m(0.006));
+    const baseY = H - pad - m(0.006);
+    const at = s.highlight && !s.coaching ? line.toLowerCase().indexOf(s.highlight.toLowerCase()) : -1;
+    if (at < 0) {
+      ctx.fillStyle = s.coaching ? YELLOW : '#ffffff';
+      ctx.fillText(line, left, baseY);
+    } else {
+      // The light's name in yellow, the rest in white.
+      const parts = [line.slice(0, at), line.slice(at, at + s.highlight!.length), line.slice(at + s.highlight!.length)];
+      let x = left;
+      parts.forEach((part, i) => {
+        ctx.fillStyle = i === 1 ? YELLOW : '#ffffff';
+        ctx.fillText(part, x, baseY);
+        x += ctx.measureText(part).width;
+      });
+    }
     this.texture.needsUpdate = true;
   }
 }
