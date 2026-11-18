@@ -3,6 +3,23 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (2 AM): last notes before the recording (ben, Quest 1 playthrough)
+
+Stills from ben's 17-minute recording: project files `meta-vr/playtest-r8/`.
+
+| ben's note | Status |
+| --- | --- |
+| "the up arrow when there's a light label and potentially a hanging pole above a light is hard to read" | **Done.** Up and down arrows are bolder (90% instead of 60%), a bit bigger, and stand beside the light (toward the middle of the set) instead of over it. |
+| "the camera op and the camera and the little monitor should all be passthrough" | **Done.** The whole camera rig (camera, operator, monitor stand) ignores pointing, pinching and clicks. Not tried with a real controller ray. |
+| "impossible to click any buttons on the overhead panel... don't have any buttons you need to click up there" (Got it, Take a bow) | **Done.** The sign only shows TARGET and MATCH %. |
+| "move any tutorial text from there down to the actual set, floating like an in-world object... positioned over the lights it's talking about" | **Done.** The tip and its button (Got it, Take a bow) ride a small dark card floating in the set: by the HOUSE switch for the house lights, under a high light or over a low one when it's about that light (offset toward the side wall so it never covers the actor), else along the set's front edge. It stays put in the world, glides when its subject changes, and turns to face you. Long tips wrap onto up to three lines. The title page's brightness - / + moved under the title page. |
+| "turn off the house lights first... we can bring that instruction back" | **Done.** Until you've cut them once in a scene, the first tip is "First, cut the house lights so you can see what your lights do. Pinch HOUSE on the wall toward the director." and the HOUSE switch is ringed. (This reverses round 9's "don't nag first"; ben's newer call wins.) Not in the ambient-light gotcha scene or outdoors. |
+| "when a light is in the frame, the monitor next to the camera should get a red highlight" | **Done.** A pulsing red border around the camera monitor while any light is in the shot. The in-the-shot tip now also halos that light and puts its card by it. |
+| "the little monitor... high res if possible and maybe like 1.3x" | **Done.** 1.3x bigger; the shots are now mipmapped so the small monitor and the far sign stay sharp instead of shimmering (same 512x288 render; generating the mipmaps is a small extra cost per frame). |
+| "the house light in the second lesson looked a little different" | **Fixed.** Scene 2's study panelling covered our HOUSE plate, so you saw the room's own small switch instead. Now the room's switch is hidden in the headset and the same HOUSE plate sits in front of the panelling. |
+| "the labels over lights that are right in front of you are quite big and in your face" | **Done.** A light's label/controls shrink with distance, down to half size on the closest lights. |
+| "please remove 'made by claude' in the end card" | **Done.** "A film by ben, lit by you." No other mention in the game. |
+
 ## 2026-11-18 (1 AM): fixes from the blind bot playthrough
 
 From `meta-vr/playthrough/REPORT.md` (project files), run on the build before PR #37:
