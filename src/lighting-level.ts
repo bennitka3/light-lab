@@ -203,6 +203,11 @@ const PHONE_SPOT_SCALE = 0.07;
 /** A light's panel stays this long after the pointer leaves the light (seconds). */
 const PANEL_LINGER = 1.2;
 const PANEL_SCALE = 1.4;
+/**
+ * The tip once everything but the house lights is in place. In the headset, after the first
+ * scene's house lesson, it's no note at all: only the HOUSE switch pulses (ben, 2026-11-18 morning).
+ */
+const HOUSE_TIP = "Don't forget the house lights.";
 /** The tip card on the set: CARD_W x CARD_H at this scale. */
 const CARD_SCALE = 0.65;
 const Y_AXIS = new Vector3(0, 1, 0);
@@ -2791,16 +2796,6 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn) {
       score = Math.round(score * HOUSE_FACTOR);
     }
-    // House lights first, until you've cut them once this scene (ben, 2026-11-18: with them on
-    // you can't see what your lights do, only follow the arrows). After that it's your call.
-    if (this.houseOn && !this.houseEverOff && !level.outdoor && level.houseHint !== 'ambient') {
-      return {
-        score,
-        hint: this.dockReady
-          ? 'First, cut the house lights so you can see what your lights do. Pinch HOUSE.'
-          : 'First, cut the house lights so you can see what your lights do. Click HOUSE on the iPad.',
-      };
-    }
     if (level.practical && !this.practical?.on) {
       return { score: Math.min(score, 60), hint: this.dockReady ? 'The lamp in the shot is off. Point at the lamp on set and pinch.' : 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
@@ -2897,7 +2892,7 @@ export class LightingLevelSystem extends createSystem({
             ? this.dockReady && this.ambientWait > AMBIENT_RESCUE_SECONDS
               ? "Looks right, but there's too much ambient light. Cut the house lights: pinch HOUSE."
               : "Looks right, but there's too much ambient light."
-            : 'Looks right. Cut the house lights when you want to roll.',
+            : HOUSE_TIP,
       };
     }
     // Stay with the light the tip is already about until it is in place, so the tip
@@ -3564,9 +3559,8 @@ export class LightingLevelSystem extends createSystem({
           : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match. Click Got it.";
         break;
       case 'house':
-        text = this.dockReady
-          ? 'Pinch HOUSE to switch off the house lights.'
-          : `${press} HOUSE${trigger} to switch off the house lights.`;
+        // First, so you can see what your lights do (ben, 2026-11-18 morning).
+        text = this.dockReady ? 'Pinch HOUSE to switch off the house lights.' : `${press} HOUSE${trigger} to switch off the house lights.`;
         break;
       case 'look':
         text = 'Drag empty space to walk around the set. Scroll to zoom.';
@@ -3981,12 +3975,14 @@ export class LightingLevelSystem extends createSystem({
       // goes quiet while an arrow or an outlined button on a light shows the same thing.
       const shown = this.levelIndex > 0 && !coach && (this.moveArrow?.visible || (this.dimCue && this.panel?.group.visible));
       // Once won it's hands off till Cut: no tip (playthrough: "Move the key light" during the take).
-      const text = this.phase !== 'playing' ? '' : coach || (shown ? '' : iPad.hintText);
+      // After the house lights lesson, the house tip is only the pulsing switch, no note (ben).
+      const houseNudge = !coach && this.phase === 'playing' && iPad.hintText === HOUSE_TIP && Boolean(this.houseSwitchPlate?.visible);
+      const quietHouse = houseNudge && this.coachLearned.has('house');
+      const text = this.phase !== 'playing' ? '' : coach || (shown || quietHouse ? '' : iPad.hintText);
       const button = iPad.page.button;
       strip.set({ score: -1, won, text, coaching: Boolean(coach), house: null, button, highlight: this.hintName });
       // The house-lights-first tip rings the HOUSE switch, like the lesson does.
-      const houseTip = !coach && /^First, cut the house lights/.test(text) && this.houseSwitchPlate?.visible;
-      if (houseTip && this.houseSwitchPlate) {
+      if (houseNudge && this.houseSwitchPlate) {
         this.coachRing.ring(this.houseSwitchPlate, 0, 0, HOUSE_PLATE_W, HOUSE_PLATE_H, 0.002, false, 0.016);
         this.houseTipRing = true;
       } else if (this.houseTipRing) {
