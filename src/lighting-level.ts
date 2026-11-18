@@ -67,6 +67,7 @@ import {
   type LightButton,
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
+import { EdgeStrip, LightPanel, PANEL_H, STRIP_H, ShotSign, type PanelControl } from './set-hud.js';
 import * as sfx from './sfx.js';
 import { checkPlacement, localBox } from './placement-check.js';
 
@@ -171,32 +172,31 @@ const HUD_PHONE_AWAKE_OFFSET = new Vector3(0.26, 0, -0.84);
 const HUD_PHONE_XR_SCALE = 1.6;
 const HUD_PHONE_AWAKE_XR_SCALE = 2.3;
 const HUD_DESKTOP_DISTANCE = 0.6;
-// Video Village (ben, 2026-11-17 headset playtest: the iPad and phone "following you around"
-// blocked the view; then "I was imagining a fixed VR-world object, not a magically oriented
-// menu item"). In the headset it's a real cart standing on the floor beside the set, on the
-// director's side: a monitor on a short post at the back, the phone and a handheld iPad lying
-// on top. It never moves or turns to follow you, and it stays clear of the set.
-/** Where the cart stands, in the set's own meters (x toward craft services, z toward you). */
-const CART_AT = { x: -0.68, z: 0.1 };
-/** Where you stand at the start, in the set's meters: the cart turns to face it, once. */
+// Headset (ben, 2026-11-18: "the whole goal of this is to focus on what you're actually doing
+// and not on the monitor"): no iPad in play. The target and your shot hang on a sign above the
+// front of the stage like a storefront sign, the match bar and tip run along the tape at the
+// front of the set, and each light's controls float over it when you point at it. All fixed
+// to the set; nothing follows your head.
+/** Where you stand at the start, in the set's meters. */
 const START_SPOT = { x: 0, z: 0.55 };
-const CART_TOP = new Vector3(0.44, 0.02, 0.28);
-/** The monitor shows the iPad's picture about 52 cm wide, leaning back a little. */
-const DOCK_XR_SCALE = 1.3;
-const DOCK_FULL_XR_SCALE = 1.3;
-const DOCK_TILT_DEG = 8;
-/** How far above the cart top the monitor's bottom edge sits (on its post). */
-const DOCK_POST = 0.22;
-/** The iPad on the cart: about 24 cm wide, like a real one. */
-const CART_IPAD_SCALE = 0.6;
-/** On start the view turns to face the set, this far round toward the cart (degrees). */
-const FACE_TOWARD_CART_DEG = 12;
+/** The sign's bottom edge sits this far above your sightline to the back of the set floor. */
+const SIGN_CLEAR = 0.025;
+/**
+ * The strip runs along the stage's front lip (the edge of the apron), tipped up toward you. At
+ * the tape it would sit behind the lights parked on the apron, which would cover it.
+ */
+const STRIP_Z = STAGE_DEPTH / 2 + 0.225;
+const STRIP_TILT_DEG = 32;
+/** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
+const PHONE_SPOT = new Vector3(0.36, 0.004, 0.385);
+const PHONE_SPOT_SCALE = 0.7;
+/** A light's panel stays this long after the pointer leaves the light (seconds). */
+const PANEL_LINGER = 1.2;
+const PANEL_SCALE = 1.4;
 const Y_AXIS = new Vector3(0, 1, 0);
 const X_AXIS = new Vector3(1, 0, 0);
-// Squeeze and drag a held iPad or phone to move it in your view; that spot is remembered.
+// Squeeze and drag the picked-up phone to move it in your view; that spot is remembered.
 const HELD_KEY = 'lightLab.heldOffsets.v2';
-/** Held iPad: low and to the cart's side of your view, so the set stays clear. */
-const HELD_IPAD_OFFSET = new Vector3(-0.3, -0.14, -0.7);
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
@@ -372,12 +372,11 @@ function itemName(item: KitItem): string {
 
 const ZOOM_KEY = 'lightLab.ipadZoom';
 
-/** Where you last dragged the held iPad and phone to (head space), or the defaults. */
-function loadHeldOffsets(): { ipad: Vector3; phone: Vector3 } {
-  const offsets = { ipad: HELD_IPAD_OFFSET.clone(), phone: HUD_PHONE_AWAKE_OFFSET.clone() };
+/** Where you last dragged the picked-up phone to (head space), or the default. */
+function loadHeldOffsets(): { phone: Vector3 } {
+  const offsets = { phone: HUD_PHONE_AWAKE_OFFSET.clone() };
   try {
-    const saved = JSON.parse(localStorage.getItem(HELD_KEY) ?? 'null') as { ipad?: number[]; phone?: number[] } | null;
-    if (saved?.ipad?.length === 3) offsets.ipad.fromArray(saved.ipad);
+    const saved = JSON.parse(localStorage.getItem(HELD_KEY) ?? 'null') as { phone?: number[] } | null;
     if (saved?.phone?.length === 3) offsets.phone.fromArray(saved.phone);
   } catch {
     // No storage (private window): the defaults.
@@ -385,9 +384,9 @@ function loadHeldOffsets(): { ipad: Vector3; phone: Vector3 } {
   return offsets;
 }
 
-function saveHeldOffsets(offsets: { ipad: Vector3; phone: Vector3 }): void {
+function saveHeldOffsets(offsets: { phone: Vector3 }): void {
   try {
-    localStorage.setItem(HELD_KEY, JSON.stringify({ ipad: offsets.ipad.toArray(), phone: offsets.phone.toArray() }));
+    localStorage.setItem(HELD_KEY, JSON.stringify({ phone: offsets.phone.toArray() }));
   } catch {
     // No storage: it just isn't remembered.
   }
@@ -493,32 +492,33 @@ export class LightingLevelSystem extends createSystem({
   private phone = new PhoneHud();
   private hudPlaced = false;
   private xrPlaced = false;
-  /** Headset: the iPad stands on the Video Village monitor stand (set up a few frames into the session). */
+  /** Headset: the sign, the strip and the phone's spot are set up (a few frames into the session). */
   private dockReady = false;
   private immersiveFrames = 0;
-  /** The monitor's bottom-center and facing, in world space. */
-  private dockBottom = new Vector3();
-  private dockQuat = new Quaternion();
-  private cartObject?: Object3D;
   private dockTmp = new Vector3();
   private dockDir = new Vector3();
-  /** Headset: you've picked the handheld iPad up off the cart (the monitor goes dark meanwhile). */
-  private ipadHeld = false;
-  /** The iPad lying on the cart: a copy that shares its pictures. */
-  private cartIpad?: Object3D;
-  private cartIpadEntity?: Entity;
-  /** [original, copy] meshes whose visibility the copy follows (the shots hide on full pages). */
-  private mirrorPairs: Object3D[][] = [];
-  private cartPhonePos = new Vector3();
-  private cartPhoneQuat = new Quaternion();
-  private cartIpadPos = new Vector3();
-  private cartIpadQuat = new Quaternion();
-  /** Where the held iPad and phone ride in front of your eyes (head space); you can drag them. */
+  private dockQuatTmp = new Quaternion();
+  /** A hand's ray is on the light panel (it stays up while you use it). */
+  private panelHot = false;
+  /** The sign over the front of the stage (target + your shot) and its own copy of the live picture. */
+  private sign?: ShotSign;
+  /** The sign's center and facing in world space (full pages show the iPad there). */
+  private signPos = new Vector3();
+  private signQuat = new Quaternion();
+  /** The match bar and tip along the front of the set, with HOUSE and Next scene. */
+  private strip?: EdgeStrip;
+  /** A light's controls, over the light you point at. */
+  private panel?: LightPanel;
+  private panelFixture?: Fixture;
+  private panelLinger = 0;
+  private phoneSpotPos = new Vector3();
+  private phoneSpotQuat = new Quaternion();
+  /** Where the picked-up phone rides in front of your eyes (head space); you can drag it. */
   private heldOffsets = loadHeldOffsets();
   /** Is each hand's near-grab on? Off while its ray points at the iPad or phone, so they win (ben, 2026-11-17). */
   private grabOn = { left: true, right: true };
   /** A held iPad or phone being dragged to a new spot with the squeeze. */
-  private hudDrag: { hand: 'left' | 'right'; what: 'ipad' | 'phone'; distance: number } | null = null;
+  private hudDrag: { hand: 'left' | 'right'; what: 'phone'; distance: number } | null = null;
   private rayOrigin = new Vector3();
   private rayDir = new Vector3();
   private hudRaycaster = new Raycaster();
@@ -669,7 +669,7 @@ export class LightingLevelSystem extends createSystem({
       this.world.visibilityState.subscribe((state) => {
         const wasImmersive = this.immersive;
         this.immersive = state !== VisibilityState.NonImmersive;
-        if (wasImmersive !== this.immersive) this.resetVideoVillage();
+        if (wasImmersive !== this.immersive) this.resetOnSet();
         if (this.immersive) sfx.unlock();
         if (this.ready) this.ipad.setVrButton(this.canEnterXR && !this.immersive);
         if (this.ready && this.phase === 'title' && wasImmersive !== this.immersive) this.showTitleCard();
@@ -1014,10 +1014,18 @@ export class LightingLevelSystem extends createSystem({
             return { at: at.toArray(), rig: this.cameraRig.position.toArray() };
           },
           enterXR: () => this.enterHeadset(),
-          // Headset: the "Put down" button the held iPad shows (to look at its layout in the browser).
-          putDownButton: (on: boolean) => {
-            this.ipad.setVrButton(!on && this.canEnterXR && !this.immersive);
-            this.ipad.setPutDownButton(on);
+          // Headset: what the sign, the strip and a light's panel show, and where they are.
+          onSet: () => ({
+            ready: this.dockReady,
+            sign: this.sign ? this.sign.group.position.toArray() : null,
+            strip: this.strip ? this.strip.mesh.position.toArray() : null,
+            panel: this.panel?.group.visible && this.panelFixture ? { light: KIND_LABELS[this.panelFixture.item.kind], at: this.panel.group.getWorldPosition(new Vector3()).toArray(), linger: this.panelLinger } : null,
+            phase: this.phase,
+          }),
+          // Headset: show a light's panel as if you pointed at it (by its kit index).
+          pointAt: (kit: number) => {
+            this.panelFixture = this.fixtures[kit];
+            this.panelLinger = 600;
           },
           xrStatus: () => this.xrStatus,
           // Where the lower third and phone sit relative to the viewer's head (meters).
@@ -1468,7 +1476,12 @@ export class LightingLevelSystem extends createSystem({
         // One text from Dee, not five (ben, 2026-11-17: "D is sending me 15,000 messages").
         // The first scene's lessons are the coach's job, on the iPad.
         if (this.levelIndex === 0) {
-          this.phone.text('dee', "wait. is that YOU holding a light?? 😂 don't panic. I'm in video village. do what the iPad says");
+          this.phone.text(
+            'dee',
+            this.immersive
+              ? "wait. is that YOU holding a light?? 😂 don't panic. I'm in video village. follow the yellow"
+              : "wait. is that YOU holding a light?? 😂 don't panic. I'm in video village. do what the iPad says",
+          );
         } else {
           this.textDee();
         }
@@ -1617,10 +1630,12 @@ export class LightingLevelSystem extends createSystem({
       // No list of controls up front (ben, 2026-11-16: it "means nothing without seeing the
       // actual controls"). The coach rings each one, on the iPad or on set, when it's needed.
       steps: [
-        'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
-        'Each control lights up in yellow, here or on set, the first time you need it.',
-        // Headset: this page is on the Video Village monitor; the cart holds a handheld copy.
-        ...(headset ? ['Want it in your hand? Point at the iPad on the cart and pull the trigger.'] : []),
+        headset
+          ? 'Make YOUR SHOT on this sign match the TARGET, then hands off till Cut.'
+          : 'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
+        headset
+          ? "Point at a light for its controls. Yellow shows what's next."
+          : 'Each control lights up in yellow, here or on set, the first time you need it.',
       ],
       footer: IS_RESULT && !this.xrStatus
         ? 'RESULT BETA: one scene, judged only by how your shot looks. Any lights, anywhere. No bar.'
@@ -2136,8 +2151,6 @@ export class LightingLevelSystem extends createSystem({
       this.enterHeadset();
     } else if (control.type === 'size') {
       this.zoomIpad(control.step);
-    } else if (control.type === 'putDown') {
-      this.holdIpad(false);
     } else if (control.type === 'light') {
       const target = this.buttonTargets[control.index];
       if (target === 'house') {
@@ -2405,7 +2418,15 @@ export class LightingLevelSystem extends createSystem({
     const previousTarget = renderer.getRenderTarget();
     const xrEnabled = renderer.xr.enabled;
     renderer.xr.enabled = false;
+    const ipadVisible = this.ipad.object.visible;
     this.ipad.object.visible = false;
+    // The headset's sign shows this very picture: never draw it into itself.
+    const signVisible = this.sign?.group.visible ?? false;
+    const stripVisible = this.strip?.mesh.visible ?? false;
+    const panelVisible = this.panel?.group.visible ?? false;
+    if (this.sign) this.sign.group.visible = false;
+    if (this.strip) this.strip.mesh.visible = false;
+    if (this.panel) this.panel.group.visible = false;
     const bubbleVisible = this.bubble.mesh.visible;
     this.bubble.mesh.visible = false;
     const castBubbleVisible = this.castBubble.mesh.visible;
@@ -2439,7 +2460,10 @@ export class LightingLevelSystem extends createSystem({
       this.bubble.mesh.visible = bubbleVisible;
       this.castBubble.mesh.visible = castBubbleVisible;
       this.phone.mesh.visible = phoneVisible;
-      this.ipad.object.visible = true;
+      this.ipad.object.visible = ipadVisible;
+      if (this.sign) this.sign.group.visible = signVisible;
+      if (this.strip) this.strip.mesh.visible = stripVisible;
+      if (this.panel) this.panel.group.visible = panelVisible;
       renderer.xr.enabled = xrEnabled;
     }
   }
@@ -2624,7 +2648,7 @@ export class LightingLevelSystem extends createSystem({
     // lights look right, and Dee mentions them only after they've stayed on a while
     // with lights placed (updateNudges).
     if (level.practical && !this.practical?.on) {
-      return { score: Math.min(score, 60), hint: 'The lamp in the shot is off. Tap Lamp on the iPad.' };
+      return { score: Math.min(score, 60), hint: this.dockReady ? 'The lamp in the shot is off. Point at the lamp on set and pull the trigger.' : 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
     const missing = assigned.filter((a) => !a.fixture);
     if (missing.length > 0) {
@@ -2651,7 +2675,7 @@ export class LightingLevelSystem extends createSystem({
         return { score, hint: `Still missing: the ${role.label.toLowerCase()}. Drag ${role.kindHint} onto the set.` };
       }
       const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
-      return { score, hint: on.length === 0 ? "Tap a light's button on the iPad to switch it on." : `${label} Use ${role.kindHint}.` };
+      return { score, hint: on.length === 0 ? (this.dockReady ? 'Point at a light, then at the ⏻ button over it, to switch it on.' : "Tap a light's button on the iPad to switch it on.") : `${label} Use ${role.kindHint}.` };
     }
     if (extras.length > 0) {
       score = Math.min(score, 70);
@@ -2713,9 +2737,10 @@ export class LightingLevelSystem extends createSystem({
     const lower = worst.role.label.toLowerCase();
     const name = KIND_NAMES[worst.fixture!.item.kind];
     const lot = Math.abs(worstErr) >= 0.3 ? 'way ' : '';
+    const where = this.dockReady ? 'over it' : 'on the iPad';
     return worstErr > 0
-      ? `The ${lower} is ${lot}too bright. Dim the ${name} (◀ on the iPad).`
-      : `The ${lower} is ${lot}too dark. Bring the ${name} up (▶ on the iPad).`;
+      ? `The ${lower} is ${lot}too bright. Dim the ${name} (◀ ${where}).`
+      : `The ${lower} is ${lot}too dark. Bring the ${name} up (▶ ${where}).`;
   }
 
   /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
@@ -3195,7 +3220,9 @@ export class LightingLevelSystem extends createSystem({
     this.coachFixture = undefined;
     switch (skill) {
       case 'shots':
-        text = "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match.";
+        text = this.dockReady
+          ? "The sign over the stage: the director's TARGET, then YOUR SHOT, live. Make them match."
+          : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match.";
         break;
       case 'house':
         text = `${press} HOUSE${trigger} to switch off the house lights.`;
@@ -3206,7 +3233,9 @@ export class LightingLevelSystem extends createSystem({
       case 'switch': {
         const fixture = this.coachSwitchFixture()!;
         this.coachFixture = fixture;
-        text = `${press} ${KIND_LABELS[fixture.item.kind]}${trigger} to switch that light on.`;
+        text = this.dockReady
+          ? `Point at the ⏻ button over the ${KIND_LABELS[fixture.item.kind]} and pull the trigger to switch it on.`
+          : `${press} ${KIND_LABELS[fixture.item.kind]}${trigger} to switch that light on.`;
         break;
       }
       case 'drag':
@@ -3224,17 +3253,21 @@ export class LightingLevelSystem extends createSystem({
         const name = KIND_LABELS[found.fixture.item.kind];
         // The blind track never says which way: matching by eye is the game there.
         if (IS_BETA) {
-          text = `${press} ◀ or ▶ on the ${name}${trigger} to dim it or brighten it.`;
+          text = this.dockReady
+            ? `Point at ◀ or ▶ over the ${name} and pull the trigger to dim it or brighten it.`
+            : `${press} ◀ or ▶ on the ${name}${trigger} to dim it or brighten it.`;
           break;
         }
-        text = `${press} ${brighter ? '▶' : '◀'} on the ${KIND_LABELS[found.fixture.item.kind]}${trigger} to make it ${brighter ? 'brighter' : 'dimmer'}.`;
+        text = this.dockReady
+          ? `Point at ${brighter ? '▶' : '◀'} over the ${name} and pull the trigger to make it ${brighter ? 'brighter' : 'dimmer'}.`
+          : `${press} ${brighter ? '▶' : '◀'} on the ${name}${trigger} to make it ${brighter ? 'brighter' : 'dimmer'}.`;
         break;
       }
       case 'phone':
         text = !vr
           ? 'Dee texts you why. Click the phone to keep it up.'
           : this.dockReady
-          ? 'Dee texted you. Point at the phone on the cart and pull the trigger to pick it up.'
+          ? 'Dee texted you. Point at the phone on the stage, toward craft services, and pull the trigger to pick it up.'
           : 'Dee texts you why. Point at the phone and pull the trigger to keep it up.';
         break;
     }
@@ -3303,6 +3336,11 @@ export class LightingLevelSystem extends createSystem({
       else ring.hide();
     };
     const button = (fixture: Fixture | 'house') => this.buttonTargets.indexOf(fixture);
+    // Headset: the controls are on the set (the sign, the strip, the panel over a light).
+    if (this.dockReady && skill !== 'drag' && skill !== 'raise' && skill !== 'phone' && skill !== 'look') {
+      this.aimCoachRingOnSet(skill);
+      return;
+    }
     switch (skill) {
       case 'shots': {
         // Both shots in one ring: they're the pair to compare.
@@ -3356,6 +3394,38 @@ export class LightingLevelSystem extends createSystem({
         ring.hide();
         break;
     }
+  }
+
+  /** Headset: rings the shots on the sign, HOUSE on the strip, or a button on a light's panel. */
+  private aimCoachRingOnSet(skill: CoachSkill): void {
+    const ring = this.coachRing;
+    const sign = this.sign;
+    const strip = this.strip;
+    const panel = this.panel;
+    if (skill === 'shots' && sign) {
+      const a = sign.targetFrame;
+      const b = sign.liveFrame;
+      ring.ring(sign.group, (a.x + b.x) / 2, a.y, b.x - a.x + a.w, a.h, 0.003);
+      return;
+    }
+    if (skill === 'house' && strip?.mesh.visible) {
+      const frame = strip.frameOf('house');
+      if (frame) {
+        ring.ring(strip.mesh, frame.x, frame.y, frame.w, frame.h, 0.002, false, 0.014);
+        return;
+      }
+    }
+    if ((skill === 'switch' || skill === 'dimmer') && panel?.group.visible) {
+      const step = skill === 'switch' ? 'power' : this.coachStep?.text.includes('▶') ? 'brighter' : 'dimmer';
+      const frame = panel.frameOf(step);
+      if (frame) {
+        const w = skill === 'switch' ? frame.w : 0.018;
+        const x = skill === 'switch' ? frame.x : step === 'brighter' ? frame.x + frame.w / 2 - w / 2 : frame.x - frame.w / 2 + w / 2;
+        ring.ring(panel.group, x, frame.y, w, frame.h, 0.0018, false, 0.012);
+        return;
+      }
+    }
+    ring.hide();
   }
 
   /** The light to switch on first: the one the first role needs, or any light that's off. */
@@ -3452,7 +3522,7 @@ export class LightingLevelSystem extends createSystem({
       const zoom = this.ipadZoom;
       this.immersiveFrames++;
       // Wait for a real head pose (the first frames of a session can still be at the origin).
-      if (!this.dockReady && this.immersiveFrames > 4 && this.headWorld.y > 0.3) this.setUpVideoVillage();
+      if (!this.dockReady && this.immersiveFrames > 4 && this.headWorld.y > 0.3) this.setUpOnSet();
       ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
       phone.scale.setScalar(MathUtils.lerp(HUD_PHONE_AWAKE_XR_SCALE, HUD_PHONE_XR_SCALE, this.phoneTuck) * zoom);
       const follow = this.xrPlaced ? 1 - Math.exp(-delta * 3) : 1;
@@ -3460,7 +3530,7 @@ export class LightingLevelSystem extends createSystem({
       this.hudTarget.copy(full ? HUD_IPAD_FULL_OFFSET : HUD_IPAD_OFFSET);
       camera.localToWorld(this.hudTarget);
       if (this.dockReady) {
-        this.placeVideoVillage(full, zoom, follow, bounce);
+        this.placeOnSet(full, zoom, follow, bounce, delta);
       } else {
         ipad.position.lerp(this.hudTarget, follow);
         ipad.lookAt(this.headWorld);
@@ -3489,37 +3559,55 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /**
-   * Headset, once Video Village is set up: the monitor on its stand (the iPad itself, or its
-   * mirror while you hold the iPad), the held iPad and phone in front of you, and whatever
-   * isn't in your hand lying on the cart.
+   * Headset, once the set is dressed: the shots on the sign over the stage (or a full page,
+   * like the title, in the sign's place), the match bar and tip along the front of the stage,
+   * a light's panel over the light you point at, and the phone on the stage's front corner
+   * unless you've picked it up.
    */
-  private placeVideoVillage(full: boolean, zoom: number, follow: number, bounce: number): void {
+  private placeOnSet(full: boolean, zoom: number, follow: number, bounce: number, delta: number): void {
     const camera = this.world.camera;
     const ipad = this.ipad.object;
     const phone = this.phone.mesh;
-    const held = this.ipadHeld;
-    if (!held) {
-      // On the monitor: fixed on the cart, its bottom edge on the post. Only one iPad at a
-      // time (ben: "why are there two sets of the iPads"): while you hold it the monitor is dark.
-      const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE;
+    if (full) {
+      // A full page (title, credits) stands where the sign is, its bottom on the sign's.
+      const scale = HUD_IPAD_FULL_XR_SCALE * 0.8;
+      ipad.visible = true;
       ipad.scale.setScalar(scale);
-      ipad.quaternion.copy(this.dockQuat);
-      this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
-      ipad.position.copy(this.dockBottom).add(this.v1);
+      ipad.quaternion.copy(this.signQuat);
+      const sign = this.sign!;
+      this.v1.set(0, (IPAD_HEIGHT * scale - sign.height) / 2, 0.01).applyQuaternion(this.signQuat);
+      ipad.position.copy(this.signPos).add(this.v1);
+    } else {
+      // In play there's no iPad: the sign and the strip show what it did.
+      ipad.visible = false;
+      ipad.position.set(0, -50, 0);
     }
-    if (this.cartIpad) this.cartIpad.visible = !held;
-    for (const pair of this.mirrorPairs) pair[1].visible = pair[0].visible;
-    if (held) {
-      // In your hand, where you left it last (drag it with the squeeze to move it).
-      ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
-      this.hudTarget.copy(this.heldOffsets.ipad);
-      camera.localToWorld(this.hudTarget);
-      ipad.position.lerp(this.hudTarget, follow);
-      ipad.lookAt(this.headWorld);
+    const sign = this.sign!;
+    const strip = this.strip!;
+    const iPad = this.ipad;
+    sign.group.visible = !full;
+    strip.mesh.visible = !full && this.phase !== 'title';
+    if (!full) {
+      const won = iPad.isWon;
+      sign.setLabels(
+        `TARGET · ${iPad.page.eyebrow.toUpperCase()}`,
+        iPad.blind ? 'YOUR SHOT' : `YOUR SHOT · MATCH ${iPad.scoreValue}%`,
+        won ? '#4ade80' : '#ffffff',
+      );
+      const coach = iPad.coachText;
+      strip.set({
+        score: iPad.blind ? -1 : iPad.scoreValue,
+        won,
+        text: coach || iPad.hintText,
+        coaching: Boolean(coach),
+        house: this.level.outdoor ? null : this.houseOn,
+        button: iPad.page.button,
+      });
     }
-    const onCart = !this.phone.pinned;
-    phone.renderOrder = onCart ? 990 : 1003;
-    (phone.material as MeshBasicMaterial).depthTest = onCart;
+    this.placePanel(delta);
+    const onSet = !this.phone.pinned;
+    phone.renderOrder = onSet ? 990 : 1003;
+    (phone.material as MeshBasicMaterial).depthTest = onSet;
     if (this.phone.pinned) {
       // Picked up: in front of you, where you left it last.
       phone.scale.setScalar(HUD_PHONE_AWAKE_XR_SCALE * zoom);
@@ -3529,31 +3617,75 @@ export class LightingLevelSystem extends createSystem({
       phone.position.lerp(this.hudTarget, follow);
       phone.lookAt(this.headWorld);
     } else {
-      // Lying on the cart; a new text lights it up there. It's a thing in the room now, so it
-      // hides behind real things and under the iPad you hold.
-      phone.scale.setScalar(1);
-      phone.position.lerp(this.cartPhonePos, follow);
-      phone.quaternion.slerp(this.cartPhoneQuat, follow);
+      // Lying on the stage's front corner; a new text lights it up there. It's a thing in the
+      // room, so it hides behind real things.
+      phone.scale.setScalar(PHONE_SPOT_SCALE);
+      phone.position.lerp(this.phoneSpotPos, follow);
+      phone.quaternion.slerp(this.phoneSpotQuat, follow);
       if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
     }
   }
 
-  /** Headset: picks the handheld iPad up off the cart, or puts it back on the monitor. */
-  private holdIpad(held: boolean): void {
-    if (held === this.ipadHeld) return;
-    this.ipadHeld = held;
-    this.ipad?.setPutDownButton(held);
-    devLog(held ? 'picked up the iPad' : 'put the iPad down');
+  /**
+   * A light's panel (switch, dimmer, color) floats just over the light you point at or move,
+   * turned to face you, and stays a moment after so you can move the pointer onto it. While
+   * the coach teaches a light's switch or dimmer, that light's panel stays up.
+   */
+  private placePanel(delta: number): void {
+    const panel = this.panel!;
+    const step = this.coachStep?.skill;
+    const coached = (step === 'switch' || step === 'dimmer') && this.coachFixture ? this.coachFixture : undefined;
+    const pointed = this.fixtures.find((f) => !SHAPERS.has(f.item.kind) && (f.entity.hasComponent(Hovered) || f.entity.hasComponent(Grabbed)));
+    const wanted = pointed ?? coached;
+    if (wanted) {
+      this.panelFixture = wanted;
+      this.panelLinger = Math.max(this.panelLinger, PANEL_LINGER);
+    } else if (this.panelHot) {
+      this.panelLinger = Math.max(this.panelLinger, PANEL_LINGER);
+    } else {
+      this.panelLinger -= delta;
+    }
+    const f = this.panelLinger > 0 ? this.panelFixture : undefined;
+    if (!f || this.ipad.isFull || this.fixtures.indexOf(f) < 0) {
+      panel.group.visible = false;
+      this.panelFixture = undefined;
+      return;
+    }
+    panel.set({
+      label: KIND_LABELS[f.item.kind],
+      on: f.on,
+      dimmer: f.item.dimmer ? Math.round(f.dimmer * 100) : undefined,
+      kelvin: f.item.dial ? f.kelvin : undefined,
+    });
+    // Just over the light's head (its bounds take in its beam, so go by where the head is).
+    this.v5.copy(f.local);
+    this.v5.y += 0.05 + (PANEL_H * PANEL_SCALE) / 2;
+    this.stage.localToWorld(panel.group.position.copy(this.v5));
+    // A bit bigger than life, so it reads from where you stand.
+    panel.group.scale.setScalar(PANEL_SCALE);
+    this.world.camera.getWorldQuaternion(panel.group.quaternion);
+    panel.group.visible = true;
+  }
+
+  /** A press on a light's panel: its switch, dimmer or color. */
+  private pressPanel(control: PanelControl): void {
+    const f = this.panelFixture;
+    if (!f) return;
+    this.panelLinger = Math.max(this.panelLinger, PANEL_LINGER);
+    if (control === 'power') this.toggle(f);
+    else if (control === 'dimmer' || control === 'brighter') this.turnDimmer(f, control === 'dimmer' ? -1 : 1);
+    else this.turnDial(f, control === 'warmer' ? -1 : 1);
   }
 
   /**
-   * Headset: which held thing (or the monitor) a hand's ray points at. While it points at one,
-   * that hand's near-grab is off, so a press lands on the iPad or phone and never on a light
-   * behind it near your hand (ben, 2026-11-17: close to the set, the iPad didn't register).
-   * Squeeze while pointing at the held iPad or phone and drag to move it in your view.
+   * Headset: what a hand's ray points at among the things you press (a full page, the phone,
+   * the strip, a light's panel). While it points at one, that hand's near-grab is off, so a
+   * press lands there and never on a light behind it near your hand (ben, 2026-11-17).
+   * Squeeze while pointing at the picked-up phone and drag to move it in your view.
    */
   private updateHudRays(): void {
     const session = this.immersive ? this.world.renderer.xr.getSession() : null;
+    this.panelHot = false;
     if (!session) {
       this.hudDrag = null;
       return;
@@ -3568,6 +3700,7 @@ export class LightingLevelSystem extends createSystem({
       space.getWorldPosition(this.rayOrigin);
       space.getWorldDirection(this.rayDir).negate();
       const hit = this.hudUnderRay();
+      if (hit?.what === 'panel') this.panelHot = true;
       const squeeze = source.gamepad?.buttons[1]?.pressed ?? false;
       const drag = this.hudDrag;
       if (drag && drag.hand === hand) {
@@ -3580,9 +3713,8 @@ export class LightingLevelSystem extends createSystem({
           this.world.camera.worldToLocal(this.v1);
           this.heldOffsets[drag.what].copy(this.v1);
         }
-      } else if (!drag && squeeze && hit && !holding) {
-        const what = hit.what === 'phone' && this.phone.pinned ? 'phone' : hit.what === 'ipad' && this.ipadHeld ? 'ipad' : null;
-        if (what) this.hudDrag = { hand, what, distance: hit.distance };
+      } else if (!drag && squeeze && hit && !holding && hit.what === 'phone' && this.phone.pinned) {
+        this.hudDrag = { hand, what: 'phone', distance: hit.distance };
       }
       const wantGrab = holding || (!hit && this.hudDrag?.hand !== hand);
       if (wantGrab !== this.grabOn[hand]) {
@@ -3592,61 +3724,91 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
-  /** What the ray (rayOrigin, rayDir) hits first among the iPad, the phone and the cart's iPad. */
-  private hudUnderRay(): { what: 'ipad' | 'phone' | 'cart'; distance: number } | null {
+  /** What the ray (rayOrigin, rayDir) hits first among a full page, the phone, the strip and a light's panel. */
+  private hudUnderRay(): { what: 'ipad' | 'phone' | 'strip' | 'panel'; distance: number } | null {
     const ray = this.hudRaycaster;
     ray.set(this.rayOrigin, this.rayDir);
     ray.far = 4;
-    let best: { what: 'ipad' | 'phone' | 'cart'; distance: number } | null = null;
-    const ipadHit = ray.intersectObject(this.ipad.object, true)[0];
-    if (ipadHit && this.ipad.contains(this.ipad.object.worldToLocal(this.v2.copy(ipadHit.point)).y)) {
-      best = { what: 'ipad', distance: ipadHit.distance };
-    }
-    if (this.phone.mesh.visible) {
-      const phoneHit = ray.intersectObject(this.phone.mesh, false)[0];
-      if (phoneHit && (!best || phoneHit.distance < best.distance)) best = { what: 'phone', distance: phoneHit.distance };
-    }
-    if (this.cartIpad?.visible) {
-      const cartHit = ray.intersectObject(this.cartIpad, true)[0];
-      if (cartHit && (!best || cartHit.distance < best.distance)) best = { what: 'cart', distance: cartHit.distance };
-    }
+    let best: { what: 'ipad' | 'phone' | 'strip' | 'panel'; distance: number } | null = null;
+    const consider = (what: 'ipad' | 'phone' | 'strip' | 'panel', object: Object3D | undefined) => {
+      if (!object?.visible) return;
+      const hit = ray.intersectObject(object, true)[0];
+      if (!hit || (best && best.distance <= hit.distance)) return;
+      if (what === 'ipad' && !this.ipad.contains(this.ipad.object.worldToLocal(this.v2.copy(hit.point)).y)) return;
+      best = { what, distance: hit.distance };
+    };
+    consider('ipad', this.ipad.object);
+    consider('phone', this.phone.mesh);
+    consider('strip', this.strip?.mesh);
+    consider('panel', this.panel?.group);
     return best;
   }
 
   /**
-   * Headset start: puts the Video Village cart beside the set (once per session, at a fixed
-   * spot by the set, not by you) and turns your view to face the set, with the cart off to
-   * the side (ben, 2026-11-17: "when it started up, it was behind me").
+   * Headset start: dresses the set (once per session, from the set's own layout, not from
+   * you): the sign over the front of the stage, the strip along its front lip, the phone on
+   * its corner. Then turns your view to face the set.
    */
-  private setUpVideoVillage(): void {
+  private setUpOnSet(): void {
     this.dockReady = true;
     const head = this.headWorld;
-    this.buildCart();
-    const cart = this.cartObject!;
-    const stageAt = this.stage.getWorldPosition(this.dockTmp);
-    cart.visible = true;
-    cart.position.set(stageAt.x + CART_AT.x, stageAt.y, stageAt.z + CART_AT.z);
-    cart.rotation.set(0, Math.atan2(START_SPOT.x - CART_AT.x, START_SPOT.z - CART_AT.z), 0);
-    cart.updateMatrixWorld(true);
-    // The monitor's spot (bottom-center of its screen), the phone's and the handheld iPad's.
-    cart.getObjectByName('spot-monitor')!.getWorldPosition(this.dockBottom);
-    cart.getObjectByName('spot-monitor')!.getWorldQuaternion(this.dockQuat);
-    cart.getObjectByName('spot-phone')!.getWorldPosition(this.cartPhonePos);
-    cart.getObjectByName('spot-phone')!.getWorldQuaternion(this.cartPhoneQuat);
-    const ipadSpot = cart.getObjectByName('spot-ipad')!;
-    ipadSpot.getWorldPosition(this.cartIpadPos);
-    ipadSpot.getWorldQuaternion(this.cartIpadQuat);
-    if (this.cartIpad) {
-      this.cartIpad.position.copy(this.cartIpadPos);
-      this.cartIpad.quaternion.copy(this.cartIpadQuat);
-      this.cartIpad.scale.setScalar(CART_IPAD_SCALE);
-      this.cartIpad.visible = true;
+    this.buildSetHud();
+    const stage = this.stage;
+    stage.updateMatrixWorld(true);
+    const local = stage.worldToLocal(this.dockTmp.copy(head));
+    // The sign: centered over the front of the stage, its bottom just above your sightline to
+    // the back of the set floor, so it never hides the set (and above the lighting grid).
+    const sign = this.sign!;
+    const front = STAGE_DEPTH / 2;
+    const back = -STAGE_DEPTH / 2;
+    let sightY = STAGE_HEIGHT;
+    if (local.z > front + 0.05) sightY = local.y + ((0 - local.y) * (local.z - front)) / (local.z - back);
+    const bottom = MathUtils.clamp(sightY + SIGN_CLEAR, STAGE_HEIGHT + 0.05, Math.max(STAGE_HEIGHT + 0.05, local.y - 0.05));
+    // Tipped back to face where you stand.
+    const centerY = bottom + sign.height / 2;
+    const pitch = Math.atan2(local.y - centerY, Math.max(0.1, local.z - front));
+    sign.group.rotation.set(-pitch, 0, 0);
+    this.v1.set(0, sign.height / 2, 0).applyEuler(sign.group.rotation);
+    sign.group.position.set(0, bottom, front).add(this.v1);
+    sign.group.visible = true;
+    stage.add(sign.group);
+    // Two posts from the side walls' front tops up to the sign.
+    const posts = sign.group.getObjectByName('shot-sign-posts');
+    if (posts) {
+      posts.removeFromParent();
+      posts.clear();
     }
-    // Turn your view about your head (the room's origin turns, the set stays put) so you face
-    // the set, a little round toward the cart so both are in view.
+    const postGroup = posts ?? new Group();
+    postGroup.name = 'shot-sign-posts';
+    const metal = new MeshStandardMaterial({ color: '#2a2b30', metalness: 0.5, roughness: 0.5 });
+    for (const side of [-1, 1]) {
+      const h = bottom - STAGE_HEIGHT + 0.01;
+      const post = new Mesh(new CylinderGeometry(0.004, 0.004, h, 8), metal);
+      post.position.set(side * (sign.width / 2 - 0.03), STAGE_HEIGHT + h / 2 - 0.005, front - 0.004);
+      postGroup.add(post);
+    }
+    stage.add(postGroup);
+    sign.group.updateMatrixWorld(true);
+    sign.group.getWorldPosition(this.signPos);
+    sign.group.getWorldQuaternion(this.signQuat);
+    // The strip: on the stage's front lip, tipped up toward you, nearest of all to you (the
+    // lights parked by the tape would cover it there).
+    const strip = this.strip!;
+    const tilt = MathUtils.degToRad(STRIP_TILT_DEG);
+    strip.mesh.rotation.set(tilt - Math.PI / 2, 0, 0);
+    strip.mesh.position.set(0, 0.002 + (STRIP_H / 2) * Math.sin(tilt), STRIP_Z - (STRIP_H / 2) * Math.cos(tilt));
+    strip.mesh.visible = this.phase !== 'title';
+    stage.add(strip.mesh);
+    // The phone, lying tipped toward you on the apron's front corner.
+    const lean = MathUtils.degToRad(72);
+    this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
+    stage.localToWorld(this.phoneSpotPos.copy(this.v1));
+    stage.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -lean));
+    // Turn your view about your head (the room's origin turns, the set stays put) to face the set.
+    const stageAt = stage.getWorldPosition(this.dockTmp);
     const toSet = this.dockDir.copy(stageAt).sub(head).setY(0);
     if (toSet.lengthSq() < 1e-6) toSet.set(0, 0, -1);
-    toSet.normalize().applyAxisAngle(Y_AXIS, MathUtils.degToRad(FACE_TOWARD_CART_DEG));
+    toSet.normalize();
     const faceYaw = Math.atan2(-toSet.x, -toSet.z);
     this.world.camera.getWorldDirection(this.dockDir);
     let turn = faceYaw - Math.atan2(-this.dockDir.x, -this.dockDir.z);
@@ -3656,12 +3818,12 @@ export class LightingLevelSystem extends createSystem({
     player.rotation.y += turn;
     player.updateMatrixWorld(true);
     devLog(
-      `video village: cart at ${cart.position.x.toFixed(2)},${cart.position.z.toFixed(2)}, monitor bottom at ${this.dockBottom.y.toFixed(2)}, cart iPad at ${this.cartIpadPos.x.toFixed(2)},${this.cartIpadPos.y.toFixed(2)},${this.cartIpadPos.z.toFixed(2)}, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
+      `on set: sign bottom ${(bottom + stage.position.y).toFixed(2)} m up (sightline ${(sightY + stage.position.y).toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
     );
   }
 
-  /** Leaving or entering the headset: the room goes back to how it was, and the cart is set up again next time. */
-  private resetVideoVillage(): void {
+  /** Leaving or entering the headset: the set goes back to how it was, and is dressed again next time. */
+  private resetOnSet(): void {
     this.dockReady = false;
     this.immersiveFrames = 0;
     this.xrPlaced = false;
@@ -3670,13 +3832,16 @@ export class LightingLevelSystem extends createSystem({
       player.position.set(0, 0, 0);
       player.rotation.set(0, 0, 0);
     }
-    if (this.cartObject) this.cartObject.visible = false;
-    if (this.cartIpad) this.cartIpad.visible = false;
+    if (this.sign) this.sign.group.visible = false;
+    this.stage?.getObjectByName('shot-sign-posts')?.removeFromParent();
+    if (this.strip) this.strip.mesh.visible = false;
+    if (this.panel) this.panel.group.visible = false;
+    this.panelFixture = undefined;
+    if (this.ipad) this.ipad.object.visible = true;
     if (this.phone) {
       this.phone.mesh.renderOrder = 1003;
       (this.phone.mesh.material as MeshBasicMaterial).depthTest = false;
     }
-    this.holdIpad(false);
     this.hudDrag = null;
     for (const hand of ['left', 'right'] as const) {
       if (!this.grabOn[hand]) {
@@ -3686,79 +3851,39 @@ export class LightingLevelSystem extends createSystem({
     }
   }
 
-  /**
-   * Builds the Video Village cart once: a dark cart on four legs, a monitor (a dark body on a
-   * short post) at the back, and spots for the phone and the handheld iPad on top. Its own
-   * +z faces where you start.
-   */
-  private buildCart(): void {
-    if (this.cartObject) return;
-    const cart = new Group();
-    cart.name = 'video-village-cart';
-    const dark = new MeshStandardMaterial({ color: '#2b2c30', roughness: 0.7 });
-    const metal = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
-    const topY = -0.004;
-    const top = new Mesh(new BoxGeometry(CART_TOP.x, CART_TOP.y, CART_TOP.z), dark);
-    top.position.y = topY - CART_TOP.y / 2;
-    cart.add(top);
-    // Legs down to the real floor (the set sits at table height).
-    const legH = this.stage.getWorldPosition(this.dockTmp).y + topY - CART_TOP.y;
-    for (let i = 0; i < 4; i++) {
-      const leg = new Mesh(new CylinderGeometry(0.009, 0.009, legH, 8), metal);
-      leg.position.set((i % 2 ? 1 : -1) * (CART_TOP.x / 2 - 0.025), topY - CART_TOP.y - legH / 2, (i < 2 ? 1 : -1) * (CART_TOP.z / 2 - 0.025));
-      cart.add(leg);
-    }
-    // The monitor: a post at the back of the cart, a dark body behind the picture.
-    const backZ = -CART_TOP.z / 2 + 0.05;
-    const post = new Mesh(new CylinderGeometry(0.012, 0.012, DOCK_POST, 10), metal);
-    post.position.set(0, topY + DOCK_POST / 2, backZ - 0.02);
-    cart.add(post);
-    const spotMonitor = new Object3D();
-    spotMonitor.name = 'spot-monitor';
-    spotMonitor.position.set(0, topY + DOCK_POST, backZ);
-    spotMonitor.rotation.x = -MathUtils.degToRad(DOCK_TILT_DEG);
-    cart.add(spotMonitor);
-    const bodyW = IPAD_WIDTH * DOCK_XR_SCALE + 0.02;
-    const bodyH = IPAD_HEIGHT * DOCK_XR_SCALE + 0.02;
-    const body = new Mesh(new BoxGeometry(bodyW, bodyH, 0.025), new MeshStandardMaterial({ color: '#141416', roughness: 0.5 }));
-    body.position.set(0, bodyH / 2 - 0.01, -0.016);
-    spotMonitor.add(body);
-    // The phone lies near your end, on the craft-services side, tipped toward you.
-    const spotPhone = new Object3D();
-    spotPhone.name = 'spot-phone';
-    spotPhone.position.set(0.12, topY + 0.03, 0.06);
-    spotPhone.quaternion.setFromAxisAngle(X_AXIS, -MathUtils.degToRad(62));
-    cart.add(spotPhone);
-    // The handheld iPad leans back on the director's side.
-    const spotIpad = new Object3D();
-    spotIpad.name = 'spot-ipad';
-    const lean = MathUtils.degToRad(50);
-    const h = (IPAD_HEIGHT * CART_IPAD_SCALE) / 2;
-    spotIpad.position.set(-0.12, topY + h * Math.cos(lean) - 0.004, 0.08 - h * Math.sin(lean));
-    spotIpad.quaternion.setFromAxisAngle(X_AXIS, -lean);
-    cart.add(spotIpad);
-    this.cartObject = cart;
-    this.world.createTransformEntity(cart);
-    // The iPad on the cart: a copy of the iPad that shares its pictures; tap it to pick it up.
-    const visuals = this.ipad.object.children.filter((c) => c.name !== 'ipad-hit' && !c.name.startsWith('coach'));
-    const cartIpad = new Group();
-    cartIpad.name = 'cart-ipad';
-    for (const visual of visuals) {
-      const copy = visual.clone(false);
-      // It sits among real things, so it hides behind them (the iPad itself draws on top).
-      if (copy instanceof Mesh && copy.material instanceof MeshBasicMaterial) {
-        copy.material = copy.material.clone();
-        copy.material.depthTest = true;
-      }
-      cartIpad.add(copy);
-      this.mirrorPairs.push([visual, copy]);
-    }
-    this.cartIpad = cartIpad;
-    this.cartIpadEntity = this.world.createTransformEntity(cartIpad);
-    this.cartIpadEntity.addComponent(RayInteractable);
-    (cartIpad as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
-    (cartIpad as unknown as { addEventListener: (type: string, fn: () => void) => void }).addEventListener('pointerdown', () => {
-      if (this.immersive) this.holdIpad(true);
+  /** Builds the sign, the strip and the light panel once, with their press handlers. */
+  private buildSetHud(): void {
+    if (this.sign) return;
+    type Pressable = { addEventListener: (type: string, fn: (event: { point?: Vector3 }) => void) => void; pointerEventsOrder: number };
+    // The sign's live picture is the iPad's own (so the creature feature shows there too).
+    const sign = new ShotSign(this.targetShot.texture, this.ipad.liveMaterial, 16 / 9);
+    // A dark box behind the face, so it reads as a real sign.
+    const box = new Mesh(new BoxGeometry(sign.width + 0.01, sign.height + 0.01, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));
+    box.position.z = -0.0095;
+    sign.group.add(box);
+    this.sign = sign;
+    const strip = new EdgeStrip();
+    this.strip = strip;
+    this.world.createTransformEntity(strip.mesh).addComponent(RayInteractable);
+    const stripObject = strip.mesh as unknown as Pressable;
+    stripObject.pointerEventsOrder = 10;
+    stripObject.addEventListener('pointerdown', (event) => {
+      if (!this.immersive || !event.point) return;
+      const at = strip.mesh.worldToLocal(this.v4.copy(event.point));
+      const control = strip.controlAt(at.x, at.y);
+      if (control === 'house') this.toggleHouse();
+      else if (control === 'next') this.pressCard();
+    });
+    const panel = new LightPanel();
+    this.panel = panel;
+    this.world.createTransformEntity(panel.group).addComponent(RayInteractable);
+    const panelObject = panel.group as unknown as Pressable;
+    panelObject.pointerEventsOrder = 20;
+    panelObject.addEventListener('pointerdown', (event) => {
+      if (!this.immersive || !event.point) return;
+      const at = panel.group.worldToLocal(this.v4.copy(event.point));
+      const control = panel.controlAt(at.x, at.y);
+      if (control) this.pressPanel(control);
     });
   }
 

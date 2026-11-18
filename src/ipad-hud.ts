@@ -280,6 +280,23 @@ export class IPad {
     return SECOND_BUTTON_CENTER;
   }
 
+  /** What the play strip shows, for the headset's strip along the front of the set. */
+  get scoreValue(): number {
+    return this.score;
+  }
+
+  get hintText(): string {
+    return this.hint;
+  }
+
+  get coachText(): string {
+    return this.coach;
+  }
+
+  get isWon(): boolean {
+    return this.won;
+  }
+
   get isFull(): boolean {
     return Boolean(this.page.full);
   }
