@@ -8,7 +8,7 @@
 let ctx: AudioContext | undefined;
 let master: GainNode | undefined;
 /** Tests read these to check a sound was asked for. */
-export const played: { text: number; voice: number } = { text: 0, voice: 0 };
+export const played: { text: number; voice: number; ui: number } = { text: 0, voice: 0, ui: 0 };
 
 export function unlock(): void {
   try {
@@ -122,4 +122,80 @@ export function buzz(session: XRSession | null | undefined): void {
   } catch {
     // No haptics is fine.
   }
+}
+
+// --- Soft sounds for working the lights (ben, 2026-11-18) -------------------------
+// Quiet and short, so they sit under the scene. Levels are peak gain before the master (0.5).
+
+/** One short tone with a fast attack and an exponential fade. */
+function blip(freq: number, endFreq: number, dur: number, peak: number, type: OscillatorType = 'sine', delay = 0): void {
+  const ac = ready();
+  if (!ac || !master) return;
+  const t = ac.currentTime + delay;
+  const osc = ac.createOscillator();
+  const gain = ac.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  osc.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.linearRampToValueAtTime(peak, t + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  osc.connect(gain).connect(master);
+  osc.start(t);
+  osc.stop(t + dur + 0.02);
+}
+
+/** A light's switch: a soft two-step tick up for on, a single lower tick for off. */
+export function lightSwitch(on: boolean): void {
+  played.ui += 1;
+  if (on) {
+    blip(1400, 1100, 0.04, 0.12, 'triangle');
+    blip(2100, 1800, 0.03, 0.06, 'sine', 0.035);
+  } else {
+    blip(1100, 700, 0.05, 0.11, 'triangle');
+  }
+}
+
+/** A dimmer step: a tiny tick, a touch higher going up. */
+export function dimmerTick(up: boolean): void {
+  played.ui += 1;
+  blip(up ? 1900 : 1500, up ? 2100 : 1300, 0.035, 0.07);
+}
+
+/** A color temperature step: a short soft sweep, up for cooler, down for warmer. */
+export function dialTick(cooler: boolean): void {
+  played.ui += 1;
+  blip(cooler ? 700 : 1000, cooler ? 1050 : 650, 0.09, 0.07);
+}
+
+let slideGain: GainNode | undefined;
+let slideLevel = 0;
+
+/**
+ * A very slight slide while a light moves: soft filtered noise, louder the faster it goes.
+ * Call every frame with the light's speed (set meters per second; 0 when nothing moves).
+ */
+export function slide(speed: number): void {
+  const ac = ready();
+  if (!ac || !master) return;
+  const level = speed < 0.01 ? 0 : Math.min(0.03, 0.01 + speed * 0.08);
+  if (Math.abs(level - slideLevel) < 0.002) return;
+  slideLevel = level;
+  if (!slideGain) {
+    const buffer = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ac.createBufferSource();
+    noise.buffer = buffer;
+    noise.loop = true;
+    const band = ac.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 900;
+    band.Q.value = 0.8;
+    slideGain = ac.createGain();
+    slideGain.gain.value = 0;
+    noise.connect(band).connect(slideGain).connect(master);
+    noise.start();
+  }
+  slideGain.gain.setTargetAtTime(level, ac.currentTime, 0.06);
 }
