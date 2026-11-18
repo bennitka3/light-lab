@@ -53,6 +53,8 @@ export type IPadControl =
   | { type: 'dimmer'; index: number }
   | { type: 'brighter'; index: number }
   | { type: 'size'; step: 1 | -1 }
+  /** Headset: put the handheld iPad back on the Video Village monitor. */
+  | { type: 'putDown' }
   | { type: 'none' };
 
 type Rect = { x: number; y: number; w: number; h: number; control: IPadControl };
@@ -123,6 +125,15 @@ export class IPad {
   setVrButton(on: boolean): void {
     if (on === this.vrButton) return;
     this.vrButton = on;
+    this.draw();
+  }
+
+  /** Show a "Put down" button on the play strip (headset, while you hold the iPad). */
+  private putDownButton = false;
+
+  setPutDownButton(on: boolean): void {
+    if (on === this.putDownButton) return;
+    this.putDownButton = on;
     this.draw();
   }
 
@@ -379,7 +390,9 @@ export class IPad {
     ctx.fillText(label, pad, m(SHOT_TOP - 0.004));
     ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
     ctx.fillStyle = this.won ? '#4ade80' : '#ffffff';
-    ctx.fillText(this.blind ? 'YOUR SHOT' : `YOUR SHOT · MATCH ${this.score}%`, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
+    // Held in the headset, "Put down" needs the room, so the label drops "MATCH".
+    const yours = this.blind ? 'YOUR SHOT' : this.putDownButton ? `YOUR SHOT · ${this.score}%` : `YOUR SHOT · MATCH ${this.score}%`;
+    ctx.fillText(yours, pad + m(SHOT_W + GAP), m(SHOT_TOP - 0.004));
     this.rects = [];
     // Size buttons in the top-right corner: make the iPad smaller or bigger.
     const sz = m(0.014);
@@ -407,6 +420,19 @@ export class IPad {
       ctx.font = `bold ${m(0.0085)}px system-ui, sans-serif`;
       ctx.fillText('VR', vx + (vw - ctx.measureText('VR').width) / 2, vy + sz / 2 + m(0.003));
       this.rects.push({ x: vx - m(0.002), y: vy - m(0.003), w: vw + m(0.004), h: sz + m(0.006), control: { type: 'second' } });
+    } else if (this.putDownButton) {
+      // Headset, held in hand: "Put down" sends it back to the monitor, left of the size buttons.
+      ctx.font = `bold ${m(0.0072)}px system-ui, sans-serif`;
+      const label = 'Put down';
+      const vw = ctx.measureText(label).width + m(0.012);
+      const vx = W - pad - 2 * sz - m(0.004) - m(0.006) - vw;
+      const vy = m(SHOT_TOP - 0.004) - sz + m(0.002);
+      roundRect(ctx, vx, vy, vw, sz, sz / 2);
+      ctx.fillStyle = '#d4d4d8';
+      ctx.fill();
+      ctx.fillStyle = '#18181b';
+      ctx.fillText(label, vx + (vw - ctx.measureText(label).width) / 2, vy + sz / 2 + m(0.0026));
+      this.rects.push({ x: vx - m(0.002), y: vy - m(0.003), w: vw + m(0.004), h: sz + m(0.006), control: { type: 'putDown' } });
     }
 
     // Match bar under the shots.
