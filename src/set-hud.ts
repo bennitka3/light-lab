@@ -153,8 +153,11 @@ export class ShotSign {
 
 export const STRIP_W = 0.5;
 export const STRIP_H = 0.05;
+/** The tip card on the set (the strip moved off the sign, ben 2026-11-18): narrow, up to three lines. */
+export const CARD_W = 0.3;
+export const CARD_H = 0.07;
 const HOUSE_W = 0.07;
-const NEXT_W = 0.1;
+const NEXT_W = 0.09;
 
 export type StripState = {
   /** 0-100, or -1 for no bar (the blind track). */
@@ -184,7 +187,7 @@ export class EdgeStrip {
   private hits: Hit<StripControl>[] = [];
 
   constructor() {
-    const plane = canvasPlane(STRIP_W, STRIP_H, 'edge-strip');
+    const plane = canvasPlane(CARD_W, CARD_H, 'edge-strip');
     this.mesh = plane.mesh;
     this.canvas = plane.canvas;
     this.texture = plane.texture;
@@ -216,6 +219,12 @@ export class EdgeStrip {
     roundRect(ctx, 0, 0, W, H, m(0.006));
     ctx.fillStyle = 'rgba(14,14,16,0.92)';
     ctx.fill();
+    if (s.score < 0) {
+      // The card on the set: a faint edge so it reads as a thing against the dark studio.
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+      ctx.lineWidth = m(0.0012);
+      ctx.stroke();
+    }
     this.hits = [];
     const pad = m(0.004);
     let left = pad;
@@ -229,7 +238,7 @@ export class EdgeStrip {
       ctx.textBaseline = 'middle';
       ctx.fillText(label, x + (w - ctx.measureText(label).width) / 2, H / 2);
       // Hit frames in the plane's meters (origin at its center, y up).
-      this.hits.push({ control, frame: { x: (x + w / 2) / PX - STRIP_W / 2, y: 0, w: w / PX, h: STRIP_H } });
+      this.hits.push({ control, frame: { x: (x + w / 2) / PX - CARD_W / 2, y: 0, w: w / PX, h: CARD_H } });
     };
     if (s.house !== null) {
       button(left, m(HOUSE_W), 'HOUSE', s.house ? '#e7e5e4' : '#26262b', s.house ? '#18181b' : '#a1a1aa', 'house');
@@ -268,22 +277,14 @@ export class EdgeStrip {
       const pct = `${s.score}%`;
       ctx.fillText(pct, right - ctx.measureText(pct).width, pad + m(0.008));
     }
-    let size = 0.016;
-    ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
     const textW = barW - m(0.03);
-    while (ctx.measureText(s.text).width > textW && size > 0.0105) {
-      size -= 0.0005;
-      ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
-    }
-    let line = s.text;
-    while (ctx.measureText(line).width > textW && line.length > 4) line = `${line.slice(0, -2)}…`;
-    ctx.textBaseline = 'alphabetic';
-    const baseY = H - pad - m(0.006);
-    const at = s.highlight && !s.coaching ? line.toLowerCase().indexOf(s.highlight.toLowerCase()) : -1;
-    if (at < 0) {
-      ctx.fillStyle = s.coaching ? YELLOW : '#ffffff';
-      ctx.fillText(line, left, baseY);
-    } else {
+    const drawLine = (line: string, baseY: number) => {
+      const at = s.highlight && !s.coaching ? line.toLowerCase().indexOf(s.highlight.toLowerCase()) : -1;
+      if (at < 0) {
+        ctx.fillStyle = s.coaching ? YELLOW : '#ffffff';
+        ctx.fillText(line, left, baseY);
+        return;
+      }
       // The light's name in yellow, the rest in white.
       const parts = [line.slice(0, at), line.slice(at, at + s.highlight!.length), line.slice(at + s.highlight!.length)];
       let x = left;
@@ -292,7 +293,50 @@ export class EdgeStrip {
         ctx.fillText(part, x, baseY);
         x += ctx.measureText(part).width;
       });
+    };
+    ctx.textBaseline = 'alphabetic';
+    // No match bar (the card on the set): the tip wraps onto up to three lines instead of cutting off.
+    if (s.score < 0) {
+      const room = H - 2 * pad;
+      let size = 0.016;
+      let lines: string[] = [];
+      for (;;) {
+        ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+        lines = [];
+        let cur = '';
+        for (const word of s.text.split(' ')) {
+          const next = cur ? `${cur} ${word}` : word;
+          if (cur && ctx.measureText(next).width > textW) {
+            lines.push(cur);
+            cur = word;
+          } else cur = next;
+        }
+        if (cur) lines.push(cur);
+        if (lines.length * m(size) * 1.2 <= room || size <= 0.0095) break;
+        size -= 0.0005;
+      }
+      const fit = Math.max(1, Math.floor(room / (m(size) * 1.2)));
+      if (lines.length > fit) {
+        lines = lines.slice(0, fit);
+        let last = `${lines[fit - 1]}…`;
+        while (ctx.measureText(last).width > textW && last.length > 4) last = `${last.slice(0, -2)}…`;
+        lines[fit - 1] = last;
+      }
+      const lineH = m(size) * 1.2;
+      const top = H / 2 - (lines.length * lineH) / 2;
+      lines.forEach((line, i) => drawLine(line, top + i * lineH + m(size) * 0.95));
+      this.texture.needsUpdate = true;
+      return;
     }
+    let size = 0.016;
+    ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+    while (ctx.measureText(s.text).width > textW && size > 0.0105) {
+      size -= 0.0005;
+      ctx.font = `bold ${m(size)}px system-ui, sans-serif`;
+    }
+    let line = s.text;
+    while (ctx.measureText(line).width > textW && line.length > 4) line = `${line.slice(0, -2)}…`;
+    drawLine(line, H - pad - m(0.006));
     this.texture.needsUpdate = true;
   }
 }
