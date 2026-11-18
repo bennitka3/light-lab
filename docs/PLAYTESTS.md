@@ -3,6 +3,15 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-17: one teacher, a fixed monitor (ben, headset)
+
+| ben's note | Status |
+| --- | --- |
+| "the director is talking over [the iPad walkthrough], and then Dee is sending me 15,000 messages... consolidate where someone needs to look" | **Director done.** While the coach is teaching, the director stays quiet; his brief (quote + objective) comes once the coach has nothing left to teach. In a dark-opening scene the lights still come on, but he only grumbles about it if nobody is teaching. Dee: part 2. |
+| "kind of annoying to have the iPad and Dee's phone blocking part of my view... a real Video Village screen... I just ended up not even looking in front of me" + "if we could make the scale a little bit larger" | **Done (headset).** In the headset the iPad is a monitor on a C-stand just behind the set, its bottom edge clear of the back wall, about 70 cm wide (was about 54 cm in hand). One glance takes in the set and the shots. The browser keeps the screen-fixed iPad. Handheld option, phone on the table: part 2. |
+| "when it started up, it was like behind me... preferably it just starts in front of them" | **Done.** A few frames into each headset session the view turns (about your head) to face the set and the monitor. Emulator check: started facing backwards, turned 167°, set and monitor straight ahead. |
+| "I do like the highlights" | Kept. |
+
 ## Round 12: 2026-11-16 (ben, scene 2, desktop browser)
 
 | ben said | Status |
