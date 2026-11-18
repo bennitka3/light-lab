@@ -3,6 +3,17 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (night): sticky tips, a halo on the light, eye level (ben, Quest 1)
+
+- Following the tips meant key +, fill -, key +, fill -... one click at a time. The dimmer tip
+  now stays on the light it's about until that light is right.
+- The first time a tip names a light in a scene, its name is yellow on the strip and the
+  light's glow becomes a pulsing yellow halo (for 12 s, or until you point at the light).
+- Headset: the set is raised so its floor sits about 45 cm under your eyes (never lowered),
+  with the sign near eye level, so you don't hunch.
+- Headset: "everything is darker in VR". The view is brighter by default, and the title page
+  has BRIGHTNESS - / + (5 steps, saved on the headset). The shots on the sign aren't changed.
+
 ## 2026-11-18 (later): first Quest run of the sign (ben, headset, Quest 1)
 
 - YOUR SHOT on the sign was blank about half the time: the sign's see-through face sometimes

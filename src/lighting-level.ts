@@ -18,8 +18,11 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  LinearToneMapping,
   MovementMode,
+  NoToneMapping,
   Object3D,
+  type ToneMapping,
   OneHandGrabbable,
   PerspectiveCamera,
   Plane,
@@ -365,6 +368,33 @@ function itemName(item: KitItem): string {
 }
 
 const ZOOM_KEY = 'lightLab.ipadZoom';
+/** How long the ring stays round a light the tip names for the first time, unless you point at it first (seconds). */
+const HINT_RING_SECONDS = 12;
+/** Headset: the set's floor sits about this far under your eyes at the start. */
+const SET_BELOW_EYES = 0.45;
+// Headset brightness (ben, 2026-11-18: "everything is just darker in VR"): an exposure for the
+// view of the set, set with - and + under the title page and saved on this headset.
+const BRIGHT_KEY = 'lightLab.vrBrightness';
+const BRIGHT_STEPS = [1, 1.25, 1.5, 1.8, 2.2];
+const BRIGHT_DEFAULT = 2;
+
+function loadBrightness(): number {
+  try {
+    const saved = Number(localStorage.getItem(BRIGHT_KEY));
+    if (Number.isInteger(saved) && saved >= 0 && saved < BRIGHT_STEPS.length && localStorage.getItem(BRIGHT_KEY) !== null) return saved;
+  } catch {
+    // No storage: the default.
+  }
+  return BRIGHT_DEFAULT;
+}
+
+function saveBrightness(step: number): void {
+  try {
+    localStorage.setItem(BRIGHT_KEY, String(step));
+  } catch {
+    // Not remembered.
+  }
+}
 
 /** Where you last dragged the picked-up phone to (head space), or the default. */
 function loadHeldOffsets(): { phone: Vector3 } {
@@ -494,6 +524,24 @@ export class LightingLevelSystem extends createSystem({
   private dockQuatTmp = new Quaternion();
   /** A hand's ray is on the light panel (it stays up while you use it). */
   private panelHot = false;
+  /** The light the dimmer tip is about (it stays there until that light is right). */
+  private dimFocus?: Fixture;
+  /**
+   * The first time a tip names a light this scene, a yellow ring goes round that light on the
+   * set and its name shows in yellow (ben, 2026-11-18). Lights already shown, and the ring's light.
+   */
+  private hintShown = new Set<Fixture>();
+  private hintHalo?: { fixture: Fixture; mesh: Mesh; home: MeshBasicMaterial; glow: MeshBasicMaterial };
+  private hintPulse = 0;
+  private hintRingFixture?: Fixture;
+  private hintRingTime = 0;
+  /** The name of the light the tip is about, shown in yellow on the strip. */
+  private hintName = '';
+  /** Headset brightness (exposure), saved on this headset; the set is raised toward eye level too. */
+  private vrBrightness = loadBrightness();
+  private raisedBy = 0;
+  private toneMappingHome?: ToneMapping;
+  private exposureHome = 1;
   /** Where the strip sits on the sign (the sign's own meters). */
   private stripOnSign = new Vector3();
   /** The sign over the front of the stage (target + your shot) and its own copy of the live picture. */
@@ -776,6 +824,7 @@ export class LightingLevelSystem extends createSystem({
       this.updateBlown(delta);
       this.updateScore(delta);
       this.updateCoach(delta);
+      this.updateHintRing(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
       // Texts about the house lights dim once they're off (and brighten again if they go back on).
@@ -1017,7 +1066,13 @@ export class LightingLevelSystem extends createSystem({
             strip: this.strip ? this.strip.mesh.getWorldPosition(new Vector3()).toArray() : null,
             panel: this.panel?.group.visible && this.panelFixture ? { light: KIND_LABELS[this.panelFixture.item.kind], at: this.panel.group.getWorldPosition(new Vector3()).toArray(), linger: this.panelLinger } : null,
             phase: this.phase,
+            hintRing: this.hintHalo ? KIND_LABELS[this.hintHalo.fixture.item.kind] : null,
           }),
+          // Ring a light as a tip does the first time it names it (by its kit index), for a while.
+          ringLight: (kit: number) => {
+            this.hintRingFixture = this.fixtures[kit];
+            this.hintRingTime = 600;
+          },
           // Headset: show a light's panel as if you pointed at it (by its kit index).
           pointAt: (kit: number) => {
             this.panelFixture = this.fixtures[kit];
@@ -1079,6 +1134,10 @@ export class LightingLevelSystem extends createSystem({
 
   private loadLevel(index: number): void {
     this.unloadLevel();
+    this.hintShown.clear();
+    this.hintRingFixture = undefined;
+    this.hintHalo = undefined;
+    this.dimFocus = undefined;
     this.levelIndex = index;
     this.level = LEVELS[index];
     const level = this.level;
@@ -2695,8 +2754,8 @@ export class LightingLevelSystem extends createSystem({
     // Dimmers (beta track): once the lights are in place, say which one is too bright or too dark.
     const placed = assigned.reduce((a, b) => (b.place < a.place ? b : a));
     if (placed.place > 0.85 || level.locked) {
-      const dimHint = this.dimmerHint(assigned);
-      if (dimHint) return { score, hint: dimHint };
+      const dim = this.dimmerHint(assigned);
+      if (dim) return { score, hint: dim.hint, fixture: dim.fixture };
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
     if (this.houseOn && worst.fit > 0.85) {
@@ -2718,26 +2777,41 @@ export class LightingLevelSystem extends createSystem({
     return Math.exp(-(((fixture.dimmer - role.level) / DIMMER_TOLERANCE) ** 2));
   }
 
-  /** The tip for the dimmer furthest off, or '' when every dimmer is right. */
-  private dimmerHint(assigned: { role: Role; fixture?: Fixture }[]): string {
+  /**
+   * The tip for a dimmer that's off, or null when every dimmer is right. It stays on the light
+   * it's about until that light is right (ben, 2026-11-18: following the tips meant key +, fill -,
+   * key +, fill -... one click at a time), then moves to the one furthest off.
+   */
+  private dimmerHint(assigned: { role: Role; fixture?: Fixture }[]): { hint: string; fixture: Fixture } | null {
     let worstErr = 0;
     let worst: { role: Role; fixture?: Fixture } | undefined;
     for (const a of assigned) {
       if (!a.fixture?.item.dimmer || a.role.level === undefined) continue;
       const err = a.fixture.dimmer - a.role.level;
+      if (a.fixture === this.dimFocus && Math.abs(err) >= 0.05) {
+        worstErr = err;
+        worst = a;
+        break;
+      }
       if (Math.abs(err) > Math.abs(worstErr) + 1e-6) {
         worstErr = err;
         worst = a;
       }
     }
-    if (!worst || Math.abs(worstErr) < 0.05) return '';
+    if (!worst || Math.abs(worstErr) < 0.05) {
+      this.dimFocus = undefined;
+      return null;
+    }
+    this.dimFocus = worst.fixture;
     const lower = worst.role.label.toLowerCase();
     const name = KIND_NAMES[worst.fixture!.item.kind];
     const lot = Math.abs(worstErr) >= 0.3 ? 'way ' : '';
     const where = this.dockReady ? 'over it' : 'on the iPad';
-    return worstErr > 0
-      ? `The ${lower} is ${lot}too bright. Dim the ${name} (${this.dockReady ? '-' : '◀'} ${where}).`
-      : `The ${lower} is ${lot}too dark. Bring the ${name} up (${this.dockReady ? '+' : '▶'} ${where}).`;
+    const hint =
+      worstErr > 0
+        ? `The ${lower} is ${lot}too bright. Dim the ${name} (${this.dockReady ? '-' : '◀'} ${where}).`
+        : `The ${lower} is ${lot}too dark. Bring the ${name} up (${this.dockReady ? '+' : '▶'} ${where}).`;
+    return { hint, fixture: worst.fixture! };
   }
 
   /** Tries every way of giving roles distinct fitting lights (a handful at most) and keeps the best total fit. */
@@ -2965,7 +3039,8 @@ export class LightingLevelSystem extends createSystem({
     if (this.phase !== 'playing') {
       return;
     }
-    const { score, hint } = this.evaluate();
+    const { score, hint, fixture } = this.evaluate();
+    this.noteHintLight(hint, fixture);
     // No new match while the crew are still reacting to a blown take.
     this.holdTime = score >= this.level.winScore && this.blownTime < 0 ? this.holdTime + delta : 0;
     if (this.holdTime >= WIN_HOLD_SECONDS) {
@@ -2995,6 +3070,60 @@ export class LightingLevelSystem extends createSystem({
       this.shownText = text;
       this.ipad.setStatus(score, hint, false);
     }
+  }
+
+  /** The first time a tip names a light this scene: ring that light on the set for a few seconds. */
+  private noteHintLight(hint: string, fixture: Fixture | undefined): void {
+    const name = fixture ? KIND_NAMES[fixture.item.kind] : '';
+    this.hintName = fixture && hint.toLowerCase().includes(name.toLowerCase()) ? name : '';
+    if (!fixture || !this.hintName || this.hintShown.has(fixture)) return;
+    this.hintShown.add(fixture);
+    this.hintRingFixture = fixture;
+    this.hintRingTime = HINT_RING_SECONDS;
+    devLog(`tip rings the ${name}`);
+  }
+
+  /**
+   * While it lasts, the named light's glowing grab sphere turns into a pulsing yellow halo (its
+   * own copy of the material); pointing at the light or moving it ends it.
+   */
+  private updateHintRing(delta: number): void {
+    const f = this.hintRingFixture;
+    this.hintRingTime -= delta;
+    if (f && this.hintRingTime < HINT_RING_SECONDS - 1 && (f.entity.hasComponent(Hovered) || f.entity.hasComponent(Grabbed) || this.dragged === f)) {
+      this.hintRingTime = 0;
+    }
+    const lit = this.hintHalo;
+    if (!f || this.hintRingTime <= 0 || this.phase !== 'playing' || this.fixtures.indexOf(f) < 0) {
+      if (lit) {
+        lit.mesh.material = lit.home;
+        lit.mesh.scale.setScalar(1);
+        lit.glow.dispose();
+        this.hintHalo = undefined;
+      }
+      if (this.hintRingTime <= 0) this.hintRingFixture = undefined;
+      return;
+    }
+    if (!lit || lit.fixture !== f) {
+      if (lit) {
+        lit.mesh.material = lit.home;
+        lit.mesh.scale.setScalar(1);
+        lit.glow.dispose();
+      }
+      const mesh = f.handle instanceof Mesh ? f.handle : undefined;
+      if (!mesh) return;
+      const home = mesh.material as MeshBasicMaterial;
+      const glow = home.clone();
+      glow.depthTest = false;
+      mesh.renderOrder = 990;
+      mesh.material = glow;
+      this.hintHalo = { fixture: f, mesh, home, glow };
+    }
+    this.hintPulse += delta;
+    const beat = 0.5 + 0.5 * Math.sin(this.hintPulse * 5.5);
+    const halo = this.hintHalo!;
+    halo.glow.opacity = 0.3 + 0.3 * beat;
+    halo.mesh.scale.setScalar(1.4 + 0.2 * beat);
   }
 
   /** Dee texts when a light sits in the shot, or when the player has been stuck on one hint for a while. */
@@ -3385,6 +3514,7 @@ export class LightingLevelSystem extends createSystem({
         ring.ring(this.world.scene, this.v5.x, this.v5.y, w * 1.15, h * 1.1, Math.max(w, h) * 0.03, true);
         ring.mesh.position.z = this.v5.z;
         this.world.camera.getWorldQuaternion(ring.mesh.quaternion);
+        ring.mesh.updateMatrixWorld();
         break;
       }
       case 'look':
@@ -3583,7 +3713,12 @@ export class LightingLevelSystem extends createSystem({
     const strip = this.strip!;
     const iPad = this.ipad;
     sign.group.visible = !full;
-    strip.mesh.visible = !full && this.phase !== 'title';
+    // On the title page the strip sets the brightness; in play it's the match bar and tip.
+    const titleStrip = full && this.phase === 'title';
+    strip.mesh.visible = titleStrip || (!full && this.phase !== 'title');
+    if (titleStrip) {
+      strip.set({ score: -1, won: false, text: 'Too dark? Too bright? Pinch - or +.', coaching: false, house: null, bright: this.vrBrightness });
+    }
     sign.group.localToWorld(strip.mesh.position.copy(this.stripOnSign));
     strip.mesh.quaternion.copy(this.signQuat);
     if (!full) {
@@ -3601,6 +3736,7 @@ export class LightingLevelSystem extends createSystem({
         coaching: Boolean(coach),
         house: this.level.outdoor ? null : this.houseOn,
         button: iPad.page.button,
+        highlight: this.hintName,
       });
     }
     this.placePanel(delta);
@@ -3753,6 +3889,13 @@ export class LightingLevelSystem extends createSystem({
     const head = this.headWorld;
     this.buildSetHud();
     const stage = this.stage;
+    // Raise the set toward eye level (ben, 2026-11-18: "it should be a little bit higher... not
+    // below you, because then you feel like you're having to hunch your neck"): its floor about
+    // half a meter under your eyes, never lower than it stands.
+    stage.updateMatrixWorld(true);
+    const floorY = stage.getWorldPosition(this.dockTmp).y;
+    this.raiseSet(Math.max(0, head.y - SET_BELOW_EYES - floorY));
+    this.applyBrightness(true);
     stage.updateMatrixWorld(true);
     const local = stage.worldToLocal(this.dockTmp.copy(head));
     // The sign: centered over the front of the stage, its bottom just above your sightline to
@@ -3822,8 +3965,57 @@ export class LightingLevelSystem extends createSystem({
     );
   }
 
+  /** Moves the set (and the things kept in room space that belong to it) up by dy meters. */
+  private raiseSet(dy: number): void {
+    if (Math.abs(dy) < 1e-4) return;
+    this.stage.position.y += dy;
+    this.stage.updateMatrixWorld(true);
+    // The house light's aim and the switches' hit boxes live in room space.
+    for (const light of this.houseLights) {
+      light.position.y += dy;
+      if (light instanceof DirectionalLight) light.target.position.y += dy;
+    }
+    for (const sw of this.switches) {
+      let underStage = false;
+      sw.hit.traverseAncestors((a) => {
+        if (a === this.stage) underStage = true;
+      });
+      if (!underStage) sw.hit.position.y += dy;
+    }
+    this.raisedBy += dy;
+    this.retakeTarget = true;
+    devLog(`set raised ${dy.toFixed(2)} m`);
+  }
+
+  /** Headset brightness: an exposure on the view of the room and set (the shots on the sign stay as they are). */
+  private applyBrightness(on: boolean): void {
+    const renderer = this.world.renderer;
+    if (on) {
+      if (this.toneMappingHome === undefined) {
+        this.toneMappingHome = renderer.toneMapping;
+        this.exposureHome = renderer.toneMappingExposure;
+      }
+      if (this.toneMappingHome === NoToneMapping) renderer.toneMapping = LinearToneMapping;
+      renderer.toneMappingExposure = this.exposureHome * BRIGHT_STEPS[this.vrBrightness];
+    } else if (this.toneMappingHome !== undefined) {
+      renderer.toneMapping = this.toneMappingHome;
+      renderer.toneMappingExposure = this.exposureHome;
+      this.toneMappingHome = undefined;
+    }
+  }
+
+  private setBrightness(step: number): void {
+    this.vrBrightness = MathUtils.clamp(step, 0, BRIGHT_STEPS.length - 1);
+    saveBrightness(this.vrBrightness);
+    if (this.dockReady) this.applyBrightness(true);
+    devLog(`brightness ${this.vrBrightness + 1}`);
+  }
+
   /** Leaving or entering the headset: the set goes back to how it was, and is dressed again next time. */
   private resetOnSet(): void {
+    if (this.raisedBy !== 0) this.raiseSet(-this.raisedBy);
+    this.raisedBy = 0;
+    this.applyBrightness(false);
     this.dockReady = false;
     this.immersiveFrames = 0;
     this.xrPlaced = false;
@@ -3874,6 +4066,7 @@ export class LightingLevelSystem extends createSystem({
       const control = strip.controlAt(at.x, at.y);
       if (control === 'house') this.toggleHouse();
       else if (control === 'next') this.pressCard();
+      else if (control === 'darker' || control === 'brighter') this.setBrightness(this.vrBrightness + (control === 'brighter' ? 1 : -1));
     });
     const panel = new LightPanel();
     this.panel = panel;
