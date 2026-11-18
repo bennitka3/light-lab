@@ -604,6 +604,9 @@ export class LightingLevelSystem extends createSystem({
   private setMoved = false;
   private playerHome = new Vector3();
   private prevSelect = { left: false, right: false };
+  /** Select (trigger or hand pinch) held per hand, from the session's own events: hands may have no gamepad. */
+  private selectHeld = { left: false, right: false };
+  private selectSession?: XRSession;
   /** Times the phone has pinged this session (at most two), and a hop is due on the table. */
   private phonePings = 0;
   private phoneHop = false;
@@ -4469,6 +4472,16 @@ export class LightingLevelSystem extends createSystem({
       this.hudDrag = null;
       return;
     }
+    if (this.selectSession !== session) {
+      this.selectSession = session;
+      const held = this.selectHeld;
+      const set = (on: boolean) => (e: XRInputSourceEvent) => {
+        const h = e.inputSource.handedness;
+        if (h === 'left' || h === 'right') held[h] = on;
+      };
+      session.addEventListener('selectstart', set(true));
+      session.addEventListener('selectend', set(false));
+    }
     let holding = false;
     for (const fixture of this.fixtures) if (fixture.entity.hasComponent(Grabbed)) holding = true;
     for (const source of session.inputSources) {
@@ -4481,7 +4494,7 @@ export class LightingLevelSystem extends createSystem({
       const hit = this.hudUnderRay();
       if (hit?.what === 'panel') this.panelHot = true;
       // The floor grab spot: pinch on it and drag to slide the whole set.
-      const select = source.gamepad?.buttons[0]?.pressed ?? false;
+      const select = (source.gamepad?.buttons[0]?.pressed ?? false) || this.selectHeld[hand];
       const wasSelect = this.prevSelect[hand];
       this.prevSelect[hand] = select;
       if (this.setDrag && this.setDrag.hand === hand) {
