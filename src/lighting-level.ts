@@ -25,6 +25,7 @@ import {
   Plane,
   PlaneGeometry,
   PointLight,
+  Quaternion,
   Pressed,
   RayInteractable,
   Raycaster,
@@ -174,6 +175,20 @@ const HUD_PHONE_AWAKE_OFFSET = new Vector3(0.26, 0, -0.84);
 const HUD_PHONE_XR_SCALE = 1.6;
 const HUD_PHONE_AWAKE_XR_SCALE = 2.3;
 const HUD_DESKTOP_DISTANCE = 0.6;
+// The Video Village monitor (ben, 2026-11-17 headset playtest: the iPad and phone "following
+// you around" blocked the view, and he ended up watching the iPad instead of the set). In the
+// headset the iPad stands on a C-stand just behind the set, its bottom edge clear of the back
+// wall, so one glance takes in the set and the shots, and nothing hangs in front of your face.
+/** How far behind the set's back wall the monitor stands (meters). */
+const DOCK_BEHIND = 0.07;
+/** How far it sits toward the director's side of the set (meters). */
+const DOCK_TOWARD_DIRECTOR = 0.05;
+/** Its bottom edge clears the top of the set's walls by this much. */
+const DOCK_ABOVE_WALLS = 0.03;
+/** Its play strip is about 70 cm wide; the title page about 75 cm. */
+const DOCK_XR_SCALE = 1.75;
+const DOCK_FULL_XR_SCALE = 1.9;
+const Y_AXIS = new Vector3(0, 1, 0);
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
@@ -449,6 +464,18 @@ export class LightingLevelSystem extends createSystem({
   private phone = new PhoneHud();
   private hudPlaced = false;
   private xrPlaced = false;
+  /** Headset: the iPad stands on the Video Village monitor stand (set up a few frames into the session). */
+  private dockReady = false;
+  private immersiveFrames = 0;
+  /** The monitor's bottom-center and facing, in world space. */
+  private dockBottom = new Vector3();
+  private dockQuat = new Quaternion();
+  private dockStand?: Object3D;
+  private dockFacer = new Object3D();
+  private dockTmp = new Vector3();
+  private dockDir = new Vector3();
+  /** The director's brief, held until the coach has nothing left to teach (ben, 2026-11-17). */
+  private briefPending = false;
   private hudScale = 1;
   private hudY = 0;
   private phoneTuck = 0;
@@ -596,6 +623,7 @@ export class LightingLevelSystem extends createSystem({
       this.world.visibilityState.subscribe((state) => {
         const wasImmersive = this.immersive;
         this.immersive = state !== VisibilityState.NonImmersive;
+        if (wasImmersive !== this.immersive) this.resetVideoVillage();
         if (this.immersive) sfx.unlock();
         if (this.ready) this.ipad.setVrButton(this.canEnterXR && !this.immersive);
         if (this.ready && this.phase === 'title' && wasImmersive !== this.immersive) this.showTitleCard();
@@ -997,6 +1025,7 @@ export class LightingLevelSystem extends createSystem({
     const level = this.level;
     this.phase = 'playing';
     this.endCoachStep(false);
+    this.briefPending = false;
     // New scene: the last scene's texts dim; this scene's notes arrive bright.
     this.phone.setStep(`scene:${index}`);
     this.takeTime = -1;
@@ -1551,16 +1580,32 @@ export class LightingLevelSystem extends createSystem({
     const level = this.level;
     // The iPad shows only the shots and the tip; the director gives the brief from the set.
     this.showPage({ eyebrow: this.sceneLabel(), body: '' });
+    // One teacher at a time (ben, 2026-11-17: "the director talking at the same time as
+    // you're going through the walkthrough of the iPad is kind of a lot"). While the coach
+    // has something to teach, the director keeps quiet; his brief comes once it's done.
+    const coaching = this.coachHasLesson();
     if (level.houseIntro && !this.houseOn) {
-      // The scene opens dark; the director calls for the lights and they come on
-      // (ben, 2026-11-16: the kicked key was hard to find in the dark).
-      this.say(level.houseIntro);
+      // The scene opens dark and somebody hits the lights (ben, 2026-11-16: the kicked key
+      // was hard to find in the dark). The director only grumbles about it if nobody's teaching.
+      if (!coaching) this.say(level.houseIntro);
       this.houseIntroIn = performance.now() + HOUSE_INTRO_SECONDS * 1000;
-      this.sayNext(level.quote);
-    } else {
-      this.say(level.quote);
     }
-    this.sayNext(level.objective);
+    this.briefPending = true;
+    if (!coaching) this.giveBrief();
+  }
+
+  /** The director's brief: the scene's quote, then what to do. */
+  private giveBrief(): void {
+    if (!this.briefPending) return;
+    this.briefPending = false;
+    if (this.bubble.speaking || this.pendingLine) this.sayNext(this.level.quote);
+    else this.say(this.level.quote);
+    this.sayNext(this.level.objective);
+  }
+
+  /** Is there a lesson the coach would start teaching now? */
+  private coachHasLesson(): boolean {
+    return COACH_SKILLS.some((s) => !this.coachLearned.has(s) && this.coachNeeded(s));
   }
 
   /** The callout over the target shot: "Scene 3 of 10", or on the beta track "Beta 2/10 · Desert at noon". */
@@ -3031,7 +3076,11 @@ export class LightingLevelSystem extends createSystem({
     }
     if (!this.coachStep) {
       const skill = COACH_SKILLS.find((s) => !this.coachLearned.has(s) && this.coachNeeded(s));
-      if (!skill) return;
+      if (!skill) {
+        // Nothing left to teach: now the director gives his brief.
+        this.giveBrief();
+        return;
+      }
       this.beginCoachStep(skill);
       if (!this.coachStep) return;
     }
@@ -3327,14 +3376,26 @@ export class LightingLevelSystem extends createSystem({
       phone.quaternion.copy(ipad.quaternion);
     } else {
       const zoom = this.ipadZoom;
+      this.immersiveFrames++;
+      // Wait for a real head pose (the first frames of a session can still be at the origin).
+      if (!this.dockReady && this.immersiveFrames > 4 && this.headWorld.y > 0.3) this.setUpVideoVillage();
       ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
       phone.scale.setScalar(MathUtils.lerp(HUD_PHONE_AWAKE_XR_SCALE, HUD_PHONE_XR_SCALE, this.phoneTuck) * zoom);
       const follow = this.xrPlaced ? 1 - Math.exp(-delta * 3) : 1;
       this.xrPlaced = true;
       this.hudTarget.copy(full ? HUD_IPAD_FULL_OFFSET : HUD_IPAD_OFFSET);
       camera.localToWorld(this.hudTarget);
-      ipad.position.lerp(this.hudTarget, follow);
-      ipad.lookAt(this.headWorld);
+      if (this.dockReady) {
+        // On the stand: fixed in the room, its bottom edge on the stand, bigger than in hand.
+        const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE * zoom;
+        ipad.scale.setScalar(scale);
+        ipad.quaternion.copy(this.dockQuat);
+        this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
+        ipad.position.copy(this.dockBottom).add(this.v1);
+      } else {
+        ipad.position.lerp(this.hudTarget, follow);
+        ipad.lookAt(this.headWorld);
+      }
       // Up near the middle of the view while awake, down beside the iPad when tucked.
       // A bigger iPad pushes the phone out to keep them side by side.
       this.hudTarget.lerpVectors(HUD_PHONE_AWAKE_OFFSET, HUD_PHONE_OFFSET, this.phoneTuck);
@@ -3356,6 +3417,102 @@ export class LightingLevelSystem extends createSystem({
     this.castBubble.mesh.position.copy(this.castBubbleAt);
     camera.getWorldQuaternion(this.castBubble.mesh.quaternion);
     this.castBubble.update(delta);
+  }
+
+  /**
+   * Headset start: stands the Video Village monitor up beside the set, toward the director,
+   * and turns the room so you begin facing the set and the monitor (ben, 2026-11-17: "when it
+   * started up, it was behind me"). Runs once per headset session.
+   */
+  private setUpVideoVillage(): void {
+    this.dockReady = true;
+    const head = this.headWorld;
+    // Which way the set is from your head, flat on the floor.
+    const toSet = this.stage.getWorldPosition(this.dockTmp).sub(head).setY(0);
+    if (toSet.lengthSq() < 1e-6) toSet.set(0, 0, -1);
+    toSet.normalize();
+    // Behind the set's back wall (as seen from you), nudged toward the director's side (-x).
+    this.stage.getWorldPosition(this.dockBottom);
+    const bottomY = this.dockBottom.y + STAGE_HEIGHT + DOCK_ABOVE_WALLS;
+    this.dockBottom.addScaledVector(toSet, STAGE_DEPTH / 2 + DOCK_BEHIND);
+    this.dockBottom.x -= DOCK_TOWARD_DIRECTOR;
+    this.dockBottom.y = bottomY;
+    // Face your head, tipped back a little toward your eyes.
+    const facer = this.dockFacer;
+    facer.position.set(this.dockBottom.x, bottomY + 0.17, this.dockBottom.z);
+    facer.lookAt(head);
+    this.dockQuat.copy(facer.quaternion);
+    this.buildDockStand();
+    this.placeDockStand();
+    // Turn your view about your head (the room's origin turns, the set stays put) so you
+    // face the set, with the monitor just above it.
+    this.world.camera.getWorldDirection(this.dockDir);
+    const headYaw = Math.atan2(-this.dockDir.x, -this.dockDir.z);
+    let turn = Math.atan2(-toSet.x, -toSet.z) - headYaw;
+    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+    const player = this.world.player;
+    player.position.sub(head).applyAxisAngle(Y_AXIS, turn).add(head);
+    player.rotation.y += turn;
+    player.updateMatrixWorld(true);
+    devLog(
+      `video village: monitor at ${this.dockBottom.x.toFixed(2)},${this.dockBottom.y.toFixed(2)},${this.dockBottom.z.toFixed(2)}, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
+    );
+  }
+
+  /** Leaving or entering the headset: the room goes back to how it was, and the monitor is set up again next time. */
+  private resetVideoVillage(): void {
+    this.dockReady = false;
+    this.immersiveFrames = 0;
+    this.xrPlaced = false;
+    const player = this.world.player;
+    if (player) {
+      player.position.set(0, 0, 0);
+      player.rotation.set(0, 0, 0);
+    }
+    if (this.dockStand) this.dockStand.visible = false;
+  }
+
+  /** A C-stand for the monitor: three legs on the floor, a pole up to the monitor's bottom edge. */
+  private buildDockStand(): void {
+    if (this.dockStand) return;
+    const stand = new Group();
+    stand.name = 'video-village-stand';
+    const metal = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
+    const pole = new Mesh(new CylinderGeometry(0.011, 0.011, 1, 12), metal);
+    pole.name = 'video-village-pole';
+    stand.add(pole);
+    for (let i = 0; i < 3; i++) {
+      const leg = new Mesh(new CylinderGeometry(0.007, 0.007, 0.36, 8), metal);
+      const a = (i / 3) * Math.PI * 2 + 0.5;
+      leg.position.set(Math.sin(a) * 0.14, 0.09, Math.cos(a) * 0.14);
+      leg.rotation.set(Math.cos(a) * 1.05, 0, -Math.sin(a) * 1.05);
+      stand.add(leg);
+    }
+    // A bracket across the back of the monitor's bottom edge.
+    const bracket = new Mesh(new BoxGeometry(0.3, 0.03, 0.02), metal);
+    bracket.name = 'video-village-bracket';
+    stand.add(bracket);
+    this.dockStand = stand;
+    this.world.createTransformEntity(stand);
+  }
+
+  private placeDockStand(): void {
+    const stand = this.dockStand;
+    if (!stand) return;
+    stand.visible = true;
+    // Just behind the screen.
+    this.v1.set(0, 0, -0.025).applyQuaternion(this.dockQuat);
+    stand.position.set(this.dockBottom.x + this.v1.x, 0, this.dockBottom.z + this.v1.z);
+    this.dockDir.set(0, 0, 1).applyQuaternion(this.dockQuat);
+    stand.rotation.set(0, Math.atan2(this.dockDir.x, this.dockDir.z), 0);
+    const pole = stand.getObjectByName('video-village-pole');
+    const h = this.dockBottom.y + 0.02;
+    if (pole) {
+      pole.scale.y = h;
+      pole.position.y = h / 2;
+    }
+    const bracket = stand.getObjectByName('video-village-bracket');
+    if (bracket) bracket.position.y = this.dockBottom.y + 0.01;
   }
 
   /**
