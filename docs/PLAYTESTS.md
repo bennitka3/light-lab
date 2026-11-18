@@ -3,6 +3,20 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (morning): last notes before submitting (ben, Quest 1)
+
+| ben's note | Status |
+| --- | --- |
+| Opening card too close; no "HOW TO PLAY" or steps | **Done (PR #42).** Smaller, farther back, no steps. The first lesson walks you through instead. |
+| Hang TARGET from the top-right front corner; tutorial notes hover at the real object and don't say where it is | **Done (PR #42/#43).** |
+| Ditch "Almost there, hold it" (it flew to HOUSE) | **Done (PR #43).** |
+| Don't tell me to pinch "Got it" | **Done.** |
+| House lights lesson first; after that no note, just a pulsing yellow ring on HOUSE once everything else is in place | **Done (PR #44).** |
+| Soft UI sounds for on/off, +/- and color temperature; then "the dragging sound is awful" | **Done (PR #45), slide sound removed (PR #47).** WAVs for the video in project files `meta-vr/game-sfx/`. |
+| Never tell me to turn on a light still on the floor; move it first, then brightness; stay on the light I touched | **Done (PR #46).** |
+| Desert arrows hard to see; "Who moved a light?" for non-light gear; monitor bigger but no higher; phone pings once or twice total, bigger to grab | **Done (PR #46).** The CUT line names the thing ("the overhead silk", "the lamp"). |
+| A pinch-and-drag spot on the floor by the director to move the whole set, highlighted first | **Done (PR #48).** Up to 35 cm either way; first lesson after the opening card. Tested in the headset emulator with a controller and with a hand pinch; not yet on a real Quest. |
+
 ## 2026-11-18 (4 AM): judge playthrough before submission (headset emulator, hands only)
 
 All ten scenes and the credits were played in the IWSDK headset emulator with hand pinches only, doing
