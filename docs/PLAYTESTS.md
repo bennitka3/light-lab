@@ -3,6 +3,19 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (1 AM): before recording (ben)
+
+| ben's note | Status |
+| --- | --- |
+| Opening card: "Six months as background extra 47", "Today is your last day". | **Done.** |
+| No YOUR SHOT on the sign; you look at the live set. | **Done** (headset): the sign shows only the TARGET, bigger, with MATCH n% in its caption. Your shot stays on the camera monitor. The browser iPad keeps both (the browser has no camera view). |
+| HOUSE above the set is impossible to pinch; a light switch on the set's left wall. | **Done:** a HOUSE wall plate inside the set wall toward the director, near the open front. The coach rings it. |
+| Arrows should dim and vanish as you get close, so you look at the match bar. | **Done.** |
+| Match bar duplicated on the LIVE monitor on set. | **Done:** under the camera monitor's screen. |
+| Text vs arrows only? | **Agreed with ben:** scene 1 keeps its tutorial text; from scene 2 on, the tip line goes quiet while an arrow or an outlined button shows the same thing. Tips with nothing in the scene to show them (lamp off, missing light) still show text. |
+| Highlight order in the tutorial: first the sign, then the light, not both. | **Done:** the light's halo waits until the lesson is done. |
+| Copy audit: nothing about controls that are gone; "still no X" when X is just off. | **Done:** a light that's on set but off now says "The key light is off. Switch on the softbox." Headset copy no longer mentions YOUR SHOT on the sign, dragging, or the old HOUSE button. |
+
 ## 2026-11-18 (after midnight): the phone waits on the craft table in the browser too (ben)
 
 | ben's note | Status |

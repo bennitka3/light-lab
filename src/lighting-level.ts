@@ -188,6 +188,9 @@ const HUD_DESKTOP_DISTANCE = 0.6;
 const START_SPOT = { x: 0, z: 0.55 };
 /** The sign's bottom edge sits this far above your sightline to the back of the set floor. */
 const SIGN_CLEAR = 0.025;
+/** The HOUSE wall switch in the headset: a plate on the set's front edge, toward the director. */
+const HOUSE_PLATE_W = 0.04;
+const HOUSE_PLATE_H = 0.056;
 /** The sign's size on the back wall (ben, 2026-11-18: 0.75 and 0.9 a little too small). */
 const SIGN_SCALE = 1;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
@@ -552,6 +555,11 @@ export class LightingLevelSystem extends createSystem({
   /** Texts on the phone when last placed, and how much buzz is left (seconds). */
   private phoneSeen = 0;
   private craftTableRef?: Object3D;
+  /** Headset: the HOUSE switch plate on the set's wall, and its rocker. */
+  private houseSwitchPlate?: Mesh;
+  private houseSwitchRocker?: Object3D;
+  /** The match bar under the camera monitor. */
+  private monitorBar?: { canvas: HTMLCanvasElement; texture: CanvasTexture; key: string };
   private phoneBuzz = 0;
   /** The light a brightness tip is about and which way (its panel shows, the button outlined). */
   private dimCue?: Fixture;
@@ -1723,13 +1731,13 @@ export class LightingLevelSystem extends createSystem({
         : this.levelIndex > 0
         ? `Lucky Break · Starting at scene ${this.levelIndex + 1}`
         : 'Lucky Break · How to play',
-      title: 'Twelve years as Background Extra #47.',
-      body: 'Tonight is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
+      title: 'Six months as Background Extra #47.',
+      body: 'Today is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
       // No list of controls up front (ben, 2026-11-16: it "means nothing without seeing the
       // actual controls"). The coach rings each one, on the iPad or on set, when it's needed.
       steps: [
         headset
-          ? 'Make YOUR SHOT on this sign match the TARGET, then hands off till Cut.'
+          ? 'Make the set look like the TARGET on this sign, then hands off till Cut.'
           : 'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
         headset
           ? "Point at a light for its controls. Yellow shows what's next."
@@ -2079,6 +2087,7 @@ export class LightingLevelSystem extends createSystem({
     // The iPad's own controls are handled by its pointer listener (it needs the hit point).
 
     this.setHouseLights(this.houseOn);
+    this.updateHouseSwitchPlate();
     if (this.wallSwitch) {
       // Rocker up = on. The pilot glows while the lights are off, to find it in the dark.
       this.wallSwitch.rocker.rotation.z = this.houseOn ? 0.22 : -0.22;
@@ -2781,7 +2790,16 @@ export class LightingLevelSystem extends createSystem({
       }
       if (SHAPERS.has(role.kinds[0])) {
         // Silks and bounce cards have no switch: they just need to be on the set.
-        return { score, hint: `Still missing: the ${role.label.toLowerCase()}. Drag ${role.kindHint} onto the set.` };
+        return { score, hint: `Still missing: the ${role.label.toLowerCase()}. ${this.dockReady ? 'Pinch and move' : 'Drag'} ${role.kindHint} onto the set.` };
+      }
+      // The right light is on set but switched off: say "off", not "missing" (ben, 2026-11-18).
+      const off = role.kinds.length ? this.fixtures.find((f) => !f.on && role.kinds.includes(f.item.kind)) : undefined;
+      if (off && on.length > 0) {
+        return {
+          score,
+          hint: `The ${role.label.toLowerCase()} is off. Switch on the ${KIND_NAMES[off.item.kind]}${this.dockReady ? ' (pinch the switch over it)' : ' on the iPad'}.`,
+          fixture: off,
+        };
       }
       const label = missing.length > 1 ? `Still missing: ${missing.map((m) => m.role.label.toLowerCase()).join(', ')}.` : `Still missing: the ${role.label.toLowerCase()}.`;
       return { score, hint: on.length === 0 ? (this.dockReady ? 'Point at a light, then pinch its switch floating over it to turn it on.' : "Tap a light's button on the iPad to switch it on.") : `${label} Use ${role.kindHint}.` };
@@ -2791,7 +2809,7 @@ export class LightingLevelSystem extends createSystem({
       return {
         score,
         hint: SHAPERS.has(extras[0].item.kind)
-          ? `The ${itemName(extras[0].item)} isn't needed here. Drag it back behind the tape.`
+          ? `The ${itemName(extras[0].item)} isn't needed here. ${this.dockReady ? 'Move' : 'Drag'} it back behind the tape.`
           : `Too many lights: switch off the ${itemName(extras[0].item)}.`,
       };
     }
@@ -3167,6 +3185,12 @@ export class LightingLevelSystem extends createSystem({
     this.v1.set(0, 0, 0);
     this.v1.setComponent(this.tipMove.axis, this.tipMove.sign);
     arrow.quaternion.setFromUnitVectors(Y_AXIS, this.v1);
+    // It fades as the light nears its mark, so your eyes go to the match bar (ben, 2026-11-18).
+    const role = this.level.roles.find((r) => r.id === this.tipMove.role);
+    const left = role ? f.local.distanceTo(this.roleLocal(role, this.v2)) : 1;
+    const mat = (arrow.children[0] as Mesh).material as MeshBasicMaterial;
+    mat.opacity = 0.6 * MathUtils.clamp((left - 0.012) / 0.06, 0, 1);
+    arrow.visible = mat.opacity > 0.02;
     const bob = 0.004 * (0.5 + 0.5 * Math.sin(this.arrowTime * 4));
     arrow.position.copy(f.local).addScaledVector(this.v1, 0.024 + bob);
   }
@@ -3174,7 +3198,8 @@ export class LightingLevelSystem extends createSystem({
   private noteHintLight(hint: string, fixture: Fixture | undefined): void {
     const name = fixture ? KIND_NAMES[fixture.item.kind] : '';
     this.hintName = fixture && hint.toLowerCase().includes(name.toLowerCase()) ? name : '';
-    if (!fixture || !this.hintName || this.hintShown.has(fixture)) return;
+    // One highlight at a time (ben, 2026-11-18): the lesson's ring first, then the light.
+    if (!fixture || !this.hintName || this.hintShown.has(fixture) || this.coachStep) return;
     this.hintShown.add(fixture);
     this.hintRingFixture = fixture;
     this.hintRingTime = HINT_RING_SECONDS;
@@ -3447,11 +3472,13 @@ export class LightingLevelSystem extends createSystem({
     switch (skill) {
       case 'shots':
         text = this.dockReady
-          ? "The sign over the stage: the director's TARGET, then YOUR SHOT, live. Make them match. Pinch Got it."
+          ? "The sign shows the director's TARGET. Make the live set look like it. Pinch Got it."
           : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match. Click Got it.";
         break;
       case 'house':
-        text = `${press} HOUSE${trigger} to switch off the house lights.`;
+        text = this.dockReady
+          ? 'Pinch the HOUSE switch on the wall of the set, toward the director, to switch off the house lights.'
+          : `${press} HOUSE${trigger} to switch off the house lights.`;
         break;
       case 'look':
         text = 'Drag empty space to walk around the set. Scroll to zoom.';
@@ -3646,6 +3673,10 @@ export class LightingLevelSystem extends createSystem({
       const a = sign.targetFrame;
       const b = sign.liveFrame;
       ring.ring(sign.group, (a.x + b.x) / 2, a.y, b.x - a.x + a.w, a.h, 0.003);
+      return;
+    }
+    if (skill === 'house' && this.houseSwitchPlate) {
+      ring.ring(this.houseSwitchPlate, 0, 0, HOUSE_PLATE_W, HOUSE_PLATE_H, 0.002, false, 0.016);
       return;
     }
     if (skill === 'house' && strip?.mesh.visible) {
@@ -3848,20 +3879,25 @@ export class LightingLevelSystem extends createSystem({
       const won = iPad.isWon;
       sign.setLabels(
         `TARGET · ${iPad.page.eyebrow.toUpperCase()}`,
-        iPad.blind ? 'YOUR SHOT' : `YOUR SHOT · MATCH ${iPad.scoreValue}%`,
+        iPad.blind ? '' : `MATCH ${iPad.scoreValue}%`,
         won ? '#4ade80' : '#ffffff',
       );
       const coach = iPad.coachText;
+      // After the first scene the arrows and highlights do the talking (ben, 2026-11-18): the tip
+      // line goes quiet while an arrow or an outlined button on a light shows the same thing.
+      const shown = this.levelIndex > 0 && !coach && (this.moveArrow?.visible || (this.dimCue && this.panel?.group.visible));
       strip.set({
         score: iPad.blind ? -1 : iPad.scoreValue,
         won,
-        text: coach || iPad.hintText,
+        text: coach || (shown ? '' : iPad.hintText),
         coaching: Boolean(coach),
-        house: this.level.outdoor ? null : this.houseOn,
+        // HOUSE is a switch on the set's wall in the headset (ben: too hard to pinch up there).
+        house: null,
         button: iPad.page.button,
         highlight: this.hintName,
       });
     }
+    this.updateMonitorBar();
     this.placePanel(delta);
     const onSet = !this.phone.pinned;
     phone.renderOrder = onSet ? 990 : 1003;
@@ -3907,6 +3943,81 @@ export class LightingLevelSystem extends createSystem({
       this.phoneBuzz -= delta;
       phone.position.y = this.phoneSpotPos.y + Math.abs(Math.sin(this.phoneBuzz * 40)) * 0.0012 * Math.min(1, this.phoneBuzz);
     }
+  }
+
+  /**
+   * Headset: the HOUSE switch, a wall plate inside the set wall toward the
+   * director, at about your hand's height (ben, 2026-11-18: up on the sign it was impossible to pinch).
+   */
+  private buildHouseSwitch(): void {
+    if (this.houseSwitchPlate) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 160;
+    canvas.height = 224;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#e7e5e4';
+      ctx.beginPath();
+      ctx.roundRect(4, 4, 152, 216, 14);
+      ctx.fill();
+      ctx.fillStyle = '#18181b';
+      ctx.font = 'bold 30px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('HOUSE', 80, 44);
+    }
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    const plate = new Mesh(new PlaneGeometry(HOUSE_PLATE_W, HOUSE_PLATE_H), new MeshBasicMaterial({ map: texture, toneMapped: false }));
+    plate.name = 'house-wall-switch';
+    // The rocker: a dark paddle that tips up (lights on) or down (off).
+    const rocker = new Mesh(new BoxGeometry(0.014, 0.024, 0.004), new MeshStandardMaterial({ color: '#3f3f46', roughness: 0.5 }));
+    rocker.position.set(0, -0.006, 0.002);
+    plate.add(rocker);
+    // On the inside of the side wall toward the director, just inside the open front.
+    plate.position.set(-STAGE_WIDTH / 2 + 0.0045, 0.16, STAGE_DEPTH / 2 - 0.04);
+    plate.rotation.y = Math.PI / 2;
+    this.stage.add(plate);
+    this.houseSwitchPlate = plate;
+    this.houseSwitchRocker = rocker;
+    this.stage.updateMatrixWorld(true);
+    this.createSwitch(plate.getWorldPosition(new Vector3()), 0.05, () => {
+      this.houseIntroIn = -1;
+      sfx.click();
+      this.toggleHouse();
+    });
+    this.updateHouseSwitchPlate();
+  }
+
+  /** Redraws the camera monitor's match bar when the match changes. */
+  private updateMonitorBar(): void {
+    const bar = this.monitorBar;
+    if (!bar) return;
+    const score = this.ipad.blind ? -1 : this.ipad.scoreValue;
+    const won = this.ipad.isWon;
+    const key = `${score}|${won}`;
+    if (key === bar.key) return;
+    bar.key = key;
+    const ctx = bar.canvas.getContext('2d');
+    if (!ctx) return;
+    const W = bar.canvas.width;
+    const H = bar.canvas.height;
+    ctx.fillStyle = '#111216';
+    ctx.fillRect(0, 0, W, H);
+    if (score >= 0) {
+      ctx.fillStyle = '#2a2b30';
+      ctx.fillRect(6, 12, W - 70, H - 24);
+      ctx.fillStyle = won ? '#4ade80' : score >= 80 ? '#f5d90a' : '#f97316';
+      ctx.fillRect(6, 12, ((W - 70) * score) / 100, H - 24);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 26px system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${score}%`, W - 58, H / 2 + 1);
+    }
+    bar.texture.needsUpdate = true;
+  }
+
+  private updateHouseSwitchPlate(): void {
+    if (this.houseSwitchRocker) this.houseSwitchRocker.rotation.x = this.houseOn ? -0.35 : 0.35;
   }
 
   /** The craft services table, found once per scene load (crew are re-placed per scene). */
@@ -4103,6 +4214,7 @@ export class LightingLevelSystem extends createSystem({
     this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
     stage.localToWorld(this.phoneSpotPos.copy(this.v1));
     stage.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -lean));
+    this.buildHouseSwitch();
     devLog(
       `on set: sign bottom ${bottom.toFixed(2)} m over the set floor (sightline ${sightY.toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°`,
     );
@@ -4224,6 +4336,16 @@ export class LightingLevelSystem extends createSystem({
       const screen = new Mesh(new PlaneGeometry(w, h), this.ipad.liveMaterial);
       screen.position.z = 0.0011;
       mon.add(frame, screen);
+      // The match bar, a copy of the sign's, along the monitor's bottom edge (ben, 2026-11-18).
+      const barCanvas = document.createElement('canvas');
+      barCanvas.width = 256;
+      barCanvas.height = 40;
+      const barTexture = new CanvasTexture(barCanvas);
+      barTexture.colorSpace = SRGBColorSpace;
+      const bar = new Mesh(new PlaneGeometry(w + 0.003, 0.0047), new MeshBasicMaterial({ map: barTexture, toneMapped: false }));
+      bar.position.set(0, -h / 2 - 0.0038, 0.0011);
+      mon.add(bar);
+      this.monitorBar = { canvas: barCanvas, texture: barTexture, key: '' };
       // Faces back toward the operator and you, tipped up a little.
       mon.position.set(0, top + h / 2 + 0.002, 0.001);
       mon.rotation.x = -0.25;
@@ -4236,7 +4358,8 @@ export class LightingLevelSystem extends createSystem({
     if (this.sign) return;
     type Pressable = { addEventListener: (type: string, fn: (event: { point?: Vector3 }) => void) => void; pointerEventsOrder: number };
     // The sign's live picture is the iPad's own (so the creature feature shows there too).
-    const sign = new ShotSign(this.targetShot.texture, this.ipad.liveMaterial, 16 / 9);
+    // Only the TARGET: you match it by looking at the live set (ben, 2026-11-18); your shot is on the camera monitor.
+    const sign = new ShotSign(this.targetShot.texture, this.ipad.liveMaterial, 16 / 9, true);
     // A dark box behind the face, so it reads as a real sign.
     const boxH = sign.height + STRIP_H + 0.006 + 0.01;
     const box = new Mesh(new BoxGeometry(Math.max(sign.width, STRIP_W) + 0.01, boxH, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));

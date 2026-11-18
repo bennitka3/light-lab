@@ -70,10 +70,16 @@ export class ShotSign {
   readonly targetFrame: Frame;
   readonly liveFrame: Frame;
 
-  constructor(target: Texture, live: Material, aspect: number) {
+  /** Whether it shows only the TARGET (ben, 2026-11-18: you look at the live set, not your shot). */
+  private single: boolean;
+  private shotW: number;
+
+  constructor(target: Texture, live: Material, aspect: number, single = false) {
     this.group.name = 'shot-sign';
-    this.shotH = SIGN_SHOT_W / aspect;
-    this.width = 2 * SIGN_SHOT_W + SIGN_GAP + 2 * SIGN_PAD;
+    this.single = single;
+    this.shotW = single ? SIGN_SHOT_W * 1.5 : SIGN_SHOT_W;
+    this.shotH = this.shotW / aspect;
+    this.width = single ? this.shotW + 2 * SIGN_PAD : 2 * SIGN_SHOT_W + SIGN_GAP + 2 * SIGN_PAD;
     this.height = this.shotH + SIGN_LABEL_H + 2 * SIGN_PAD;
     // The sign's face: a rounded dark panel (the box behind it is built by the caller).
     const face = canvasPlane(this.width, this.height, 'shot-sign-face');
@@ -89,20 +95,21 @@ export class ShotSign {
     face.texture.needsUpdate = true;
     this.group.add(face.mesh);
     const shotY = -this.height / 2 + SIGN_PAD + this.shotH / 2;
-    const leftX = -SIGN_SHOT_W / 2 - SIGN_GAP / 2;
-    const rightX = SIGN_SHOT_W / 2 + SIGN_GAP / 2;
-    const targetPlane = new Mesh(new PlaneGeometry(SIGN_SHOT_W, this.shotH), new MeshBasicMaterial({ map: target, toneMapped: false }));
+    const leftX = single ? 0 : -SIGN_SHOT_W / 2 - SIGN_GAP / 2;
+    const rightX = single ? 0 : SIGN_SHOT_W / 2 + SIGN_GAP / 2;
+    const targetPlane = new Mesh(new PlaneGeometry(this.shotW, this.shotH), new MeshBasicMaterial({ map: target, toneMapped: false }));
     targetPlane.position.set(leftX, shotY, 0.001);
     const livePlane = new Mesh(new PlaneGeometry(SIGN_SHOT_W, this.shotH), live);
     livePlane.position.set(rightX, shotY, 0.001);
+    livePlane.visible = !single;
     // The face is see-through at its rounded corners, so it sorts with the other see-through
     // layers; draw it first, always (sorted by distance, it sometimes covered your shot).
     face.mesh.renderOrder = 0;
     targetPlane.renderOrder = 1;
     livePlane.renderOrder = 1;
     this.group.add(targetPlane, livePlane);
-    this.targetFrame = { x: leftX, y: shotY, w: SIGN_SHOT_W, h: this.shotH };
-    this.liveFrame = { x: rightX, y: shotY, w: SIGN_SHOT_W, h: this.shotH };
+    this.targetFrame = { x: leftX, y: shotY, w: this.shotW, h: this.shotH };
+    this.liveFrame = single ? this.targetFrame : { x: rightX, y: shotY, w: SIGN_SHOT_W, h: this.shotH };
     this.label = canvasPlane(this.width - 2 * SIGN_PAD, SIGN_LABEL_H, 'shot-sign-label');
     this.label.mesh.position.set(0, this.height / 2 - SIGN_PAD / 2 - SIGN_LABEL_H / 2, 0.001);
     this.label.mesh.renderOrder = 1;
@@ -122,15 +129,22 @@ export class ShotSign {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.font = `bold ${0.012 * PX}px system-ui, sans-serif`;
     ctx.textBaseline = 'middle';
+    const room = this.single ? this.shotW / 2 : SIGN_SHOT_W;
     const fit = (text: string) => {
       let t = text;
-      while (ctx.measureText(t).width > (SIGN_SHOT_W - 0.004) * PX && t.length > 4) t = `${t.slice(0, -2)}…`;
+      while (ctx.measureText(t).width > (room - 0.004) * PX && t.length > 4) t = `${t.slice(0, -2)}…`;
       return t;
     };
     ctx.fillStyle = YELLOW;
     ctx.fillText(fit(left), 0, canvas.height / 2);
     ctx.fillStyle = rightColor;
-    ctx.fillText(fit(right), (SIGN_SHOT_W + SIGN_GAP) * PX, canvas.height / 2);
+    if (this.single) {
+      // One shot: the second caption sits at the right end.
+      const t = fit(right);
+      ctx.fillText(t, canvas.width - ctx.measureText(t).width, canvas.height / 2);
+    } else {
+      ctx.fillText(fit(right), (SIGN_SHOT_W + SIGN_GAP) * PX, canvas.height / 2);
+    }
     texture.needsUpdate = true;
   }
 }
