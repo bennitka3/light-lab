@@ -425,7 +425,7 @@ export const BETA_LEVELS: LevelDef[] = [
     // Every dimmer exactly right: one light a single stop off reads 95% and does not win.
     winScore: 96,
     quote: '"You! Lighting! The gaffer rigged these, then fiddled with every dimmer and walked out."',
-    objective: 'Don\'t move anything. Just set how bright each light is, then kill the house lights and we\'ll roll.',
+    objective: 'Don\'t move anything. Kill the house lights, then set how bright each light is, and we\'ll roll.',
     directorWin: '"...Hm. You. Stick around."',
     after: 'did the director just TALK to you?? he never talks to anyone 👀',
     dee: [

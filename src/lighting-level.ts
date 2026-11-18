@@ -383,6 +383,8 @@ function itemName(item: KitItem): string {
 }
 
 const ZOOM_KEY = 'lightLab.ipadZoom';
+/** Headset: how long the quiet "too much ambient light" tip waits before it names the HOUSE switch (seconds). */
+const AMBIENT_RESCUE_SECONDS = 12;
 /** How long the ring stays round a light the tip names for the first time, unless you point at it first (seconds). */
 const HINT_RING_SECONDS = 12;
 /** Headset: how much bigger the set looks (you're scaled down), and where your eyes start, in set meters. */
@@ -676,6 +678,8 @@ export class LightingLevelSystem extends createSystem({
   private houseNudged = false;
   /** Seconds the house lights have been on while lights were on the set, this scene. */
   private houseWork = 0;
+  /** Headset: how long the quiet "too much ambient light" tip has been up (seconds). */
+  private ambientWait = 0;
 
   // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
   private inFrameTime = 0;
@@ -1223,6 +1227,14 @@ export class LightingLevelSystem extends createSystem({
     this.inFrameTime = 0;
     this.hintSince = 0;
     this.lastHint = '';
+    // The last scene's tip direction is done with: scene 3 opened on "Height looks good." for
+    // a light still parked on the floor (judge playthrough, 2026-11-18).
+    this.tipMove.role = '';
+    this.tipMove.axis = -1;
+    this.tipMove.sign = 0;
+    this.tipDone = '';
+    this.tipFinished = 0;
+    this.ambientWait = 0;
     this.framesSinceLoad = 0;
     this.shownText = '';
 
@@ -2437,6 +2449,10 @@ export class LightingLevelSystem extends createSystem({
         // The fabric is always on the frame (ben, round 11: "the silk should have silk on
         // it no matter where it is"). Rigged over the set, it glows with the sun it softens.
         fixture.face.emissiveIntensity = fixture.on ? 0.25 : 0;
+        // Headset: parked behind the tape it hangs right between your eyes and the set, so the
+        // whole scene opened behind a white sheet. The fabric stays on the frame, but see-through
+        // until it's rigged (0.88 is the fabric's own opacity in the kit model).
+        fixture.face.opacity = fixture.on || !this.dockReady ? 0.88 : 0.28;
         // Parked off the set it doesn't shade anything (scoring counts it only once rigged).
         const fabric = fixture.head.getObjectByName('fixture-face');
         if (fabric) fabric.castShadow = fixture.on;
@@ -2817,8 +2833,26 @@ export class LightingLevelSystem extends createSystem({
         // Silks and bounce cards have no switch: they just need to be on the set.
         return { score, hint: `Still missing: the ${role.label.toLowerCase()}. ${this.dockReady ? 'Pinch and move' : 'Drag'} ${role.kindHint} onto the set.` };
       }
+      // The light for this job is already on, just dialed to the wrong color (it can still be
+      // parked): name it, so the player isn't left guessing which of two softboxes has the dial.
+      const undialed = extras.find((f) => f.item.dial && role.kinds.includes(f.item.kind) && (role.aim ?? 'cast') === (f.item.aim ?? 'cast'));
+      if (undialed) {
+        return {
+          score,
+          hint: role.warm
+            ? `Right light, wrong color: dial the ${KIND_NAMES[undialed.item.kind]} down to 3200K (warm).`
+            : `Right light, wrong color: dial the ${KIND_NAMES[undialed.item.kind]} up to 5600K.`,
+          fixture: undialed,
+        };
+      }
       // The right light is on set but switched off: say "off", not "missing" (ben, 2026-11-18).
-      const off = role.kinds.length ? this.fixtures.find((f) => !f.on && role.kinds.includes(f.item.kind)) : undefined;
+      // Only a light that can do the job: a warm job needs the one with the color dial (the tip
+      // used to ring the plain softbox, which can never go warm; judge playthrough, 2026-11-18).
+      const off = role.kinds.length
+        ? this.fixtures.find(
+            (f) => !f.on && role.kinds.includes(f.item.kind) && (role.aim ?? 'cast') === (f.item.aim ?? 'cast') && (!role.warm || f.item.dial),
+          )
+        : undefined;
       if (off && on.length > 0) {
         return {
           score,
@@ -2836,6 +2870,8 @@ export class LightingLevelSystem extends createSystem({
         hint: SHAPERS.has(extras[0].item.kind)
           ? `The ${itemName(extras[0].item)} isn't needed here. ${this.dockReady ? 'Move' : 'Drag'} it back behind the tape.`
           : `Too many lights: switch off the ${itemName(extras[0].item)}.`,
+        // Rings it: with two softboxes on, "the softbox" alone doesn't say which.
+        fixture: extras[0],
       };
     }
     // The bounce card is in the silk's shade (the trap in the desert): say why it does nothing.
@@ -2859,7 +2895,12 @@ export class LightingLevelSystem extends createSystem({
     if (this.houseOn && worst.fit > 0.85) {
       return {
         score,
-        hint: level.houseHint === 'ambient' ? "Looks right, but there's too much ambient light." : 'Looks right. Cut the house lights when you want to roll.',
+        hint:
+          level.houseHint === 'ambient'
+            ? this.dockReady && this.ambientWait > AMBIENT_RESCUE_SECONDS
+              ? "Looks right, but there's too much ambient light. Cut the house lights: pinch HOUSE on the wall toward the director."
+              : "Looks right, but there's too much ambient light."
+            : 'Looks right. Cut the house lights when you want to roll.',
       };
     }
     // Stay with the light the tip is already about until it is in place, so the tip
@@ -3020,7 +3061,10 @@ export class LightingLevelSystem extends createSystem({
     const target = this.roleLocal(role, this.v2);
     // A light that belongs behind the cast but sits in front goes round, not through.
     if (role.orbit && target.z < this.aimLocal.z - 0.02 && here.z > this.aimLocal.z) {
-      return `The ${lower} belongs behind the cast. Move it round the back.`;
+      // Say which side: round the wrong one, the straight line to the mark crosses the shot and
+      // no small step helps (the sunset's low sun got stuck there; judge playthrough, 2026-11-18).
+      const side = target.x < this.aimLocal.x ? "on the director's side" : 'on the craft services side';
+      return `The ${lower} belongs behind the cast, ${side}. Move it round the back.`;
     }
     // One direction at a time (ben, round 9: the tip went "right, left, back..."
     // and he got nowhere). Stay on the direction the tip already gave while it
@@ -3307,6 +3351,7 @@ export class LightingLevelSystem extends createSystem({
     // already names the light that's in the shot, and the match stays capped until it's out.
     this.sinceNudge += delta;
     this.sceneTime += delta;
+    if (hint.startsWith("Looks right, but there's too much ambient light.")) this.ambientWait += delta;
     // The quiet gotcha (LevelDef.houseHint 'ambient'): the tip only says "too much
     // ambient light"; after a while Dee comes to the rescue, once per scene.
     if (this.houseOn && this.level.houseHint === 'ambient' && this.houseWork > 25 && !this.houseNudged) {
