@@ -167,35 +167,3 @@ export function dialTick(cooler: boolean): void {
   played.ui += 1;
   blip(cooler ? 700 : 1000, cooler ? 1050 : 650, 0.09, 0.07);
 }
-
-let slideGain: GainNode | undefined;
-let slideLevel = 0;
-
-/**
- * A very slight slide while a light moves: soft filtered noise, louder the faster it goes.
- * Call every frame with the light's speed (set meters per second; 0 when nothing moves).
- */
-export function slide(speed: number): void {
-  const ac = ready();
-  if (!ac || !master) return;
-  const level = speed < 0.01 ? 0 : Math.min(0.03, 0.01 + speed * 0.08);
-  if (Math.abs(level - slideLevel) < 0.002) return;
-  slideLevel = level;
-  if (!slideGain) {
-    const buffer = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    const noise = ac.createBufferSource();
-    noise.buffer = buffer;
-    noise.loop = true;
-    const band = ac.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = 900;
-    band.Q.value = 0.8;
-    slideGain = ac.createGain();
-    slideGain.gain.value = 0;
-    noise.connect(band).connect(slideGain).connect(master);
-    noise.start();
-  }
-  slideGain.gain.setTargetAtTime(level, ac.currentTime, 0.06);
-}

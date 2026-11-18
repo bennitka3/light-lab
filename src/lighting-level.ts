@@ -601,9 +601,6 @@ export class LightingLevelSystem extends createSystem({
   private arrowInk?: MeshBasicMaterial;
   /** The light the player last switched, dimmed, dialed or moved: the tips stay on it until it's done (ben). */
   private touchedFixture?: Fixture;
-  /** The light being moved last frame, and where it was (for the slide sound). */
-  private slideFixture?: Fixture;
-  private slidePrev = new Vector3();
   /** The HOUSE switch is ringed for the house-lights-first tip (not a lesson). */
   private houseTipRing = false;
   /** The sign over the front of the stage (target + your shot) and its own copy of the live picture. */
@@ -897,7 +894,6 @@ export class LightingLevelSystem extends createSystem({
       this.updateCoach(delta);
       this.updateHintRing(delta);
       this.updateMoveArrow(delta);
-      this.updateSlideSound(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
       // Texts about the house lights dim once they're off (and brighten again if they go back on).
@@ -3336,24 +3332,6 @@ export class LightingLevelSystem extends createSystem({
       arrow.position.copy(f.local).addScaledVector(this.v1, 0.024 + bob);
     }
     arrow.scale.setScalar(vertical ? 1.2 : 1);
-  }
-
-  /** A very slight slide sound while you move a light (ben, 2026-11-18), louder when faster. */
-  private updateSlideSound(delta: number): void {
-    let moving: Fixture | undefined = this.dragged ?? undefined;
-    if (!moving && this.immersive) {
-      for (const f of this.fixtures) {
-        if (f.entity.hasComponent(Grabbed)) {
-          moving = f;
-          break;
-        }
-      }
-    }
-    let speed = 0;
-    if (moving && moving === this.slideFixture && delta > 0) speed = moving.local.distanceTo(this.slidePrev) / delta;
-    this.slideFixture = moving;
-    if (moving) this.slidePrev.copy(moving.local);
-    sfx.slide(speed);
   }
 
   private noteHintLight(hint: string, fixture: Fixture | undefined): void {
