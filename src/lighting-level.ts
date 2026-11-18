@@ -73,7 +73,7 @@ import {
   type LightButton,
 } from './ipad-hud.js';
 import { BUBBLE_HEIGHT, SpeechBubble } from './speech-bubble.js';
-import { CARD_H, CARD_W, EdgeStrip, LightPanel, PANEL_H, STRIP_H, STRIP_W, ShotSign, type PanelControl } from './set-hud.js';
+import { CARD_H, CARD_W, EdgeStrip, LightPanel, PANEL_H, ShotSign, type PanelControl } from './set-hud.js';
 import * as sfx from './sfx.js';
 import { checkPlacement, localBox } from './placement-check.js';
 
@@ -194,6 +194,8 @@ const HOUSE_PLATE_W = 0.032;
 const HOUSE_PLATE_H = 0.045;
 /** The sign's size on the back wall (ben, 2026-11-18: 0.75 and 0.9 a little too small). */
 const SIGN_SCALE = 1;
+/** The sign on the set's top front corner is this much smaller than it was on the back wall. */
+const SIGN_CORNER_SCALE = 0.45;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
 const PHONE_SPOT = new Vector3(0.36, 0.004, 0.385);
 /** The phone lying on the craft services table: a real phone's size next to the crew (1/14 scale). */
@@ -3558,7 +3560,7 @@ export class LightingLevelSystem extends createSystem({
     switch (skill) {
       case 'shots':
         text = this.dockReady
-          ? "This is the director's TARGET. Make the live set look like it, then pinch Got it."
+          ? "This is the director's TARGET. Make the live set look like it."
           : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match. Click Got it.";
         break;
       case 'house':
@@ -4077,7 +4079,14 @@ export class LightingLevelSystem extends createSystem({
     const halfH = (CARD_H * CARD_SCALE) / 2;
     const halfW = (CARD_W * CARD_SCALE) / 2;
     const at = this.v6;
-    if (aboutHouse && this.houseSwitchPlate) {
+    const sign = this.sign;
+    if (skill === 'shots' && sign) {
+      // Beside the TARGET sign's lower inner corner, just over the set's front edge.
+      const sp = sign.group.position;
+      const sw = sign.width * sign.group.scale.x;
+      const sh = sign.height * sign.group.scale.x;
+      at.set(sp.x - sw / 2 - halfW - 0.008, sp.y - sh / 2 + halfH, sp.z);
+    } else if (aboutHouse && this.houseSwitchPlate) {
       // Beside the wall switch, a little in from the wall and toward you.
       const plate = this.houseSwitchPlate.position;
       at.set(-STAGE_WIDTH / 2 + halfW + 0.012, plate.y + 0.06, plate.z + 0.015);
@@ -4365,29 +4374,24 @@ export class LightingLevelSystem extends createSystem({
     stage.updateMatrixWorld(true);
     this.placeViewer();
     const local = this.dockTmp.copy(VIEW_AT);
-    // The sign: centered over the front of the stage, its bottom just above your sightline to
-    // the back of the set floor, so it never hides the set (and above the lighting grid).
+    // The TARGET sign hangs off the set's top front corner toward craft services, just above the
+    // front edge, turned to face you (ben, 2026-11-18 morning: up on the back wall you had to
+    // look away from the lesson to find it). Above the front edge it hides nothing on the set.
     const sign = this.sign!;
-    // ben, 2026-11-18: "a little TOO high above us": the sign stands on the back wall's
-    // top edge, smaller, so it reads as "up there past the set" instead of over your head.
-    const back = -STAGE_DEPTH / 2;
-    const s = SIGN_SCALE;
-    const sightY = STAGE_HEIGHT;
-    // Its bottom just clears your sightline over the grid's front edge, so nothing covers the tip.
+    const s = SIGN_SCALE * SIGN_CORNER_SCALE;
     const front = STAGE_DEPTH / 2;
-    const overFront = local.y + ((STAGE_HEIGHT + 0.01 - local.y) * (local.z - back)) / Math.max(0.05, local.z - front);
-    const bottom = Math.max(STAGE_HEIGHT + 0.012, overFront + 0.006);
-    const stripGap = 0.006;
-    const under = STRIP_H + stripGap;
-    const centerY = bottom + ((under + sign.height) * s) / 2;
-    const pitch = Math.atan2(local.y - centerY, Math.max(0.1, local.z - back));
-    sign.group.rotation.set(-pitch, 0, 0);
+    const signW = sign.width * s;
+    const signH = sign.height * s;
+    const bottom = STAGE_HEIGHT + 0.015;
+    const sightY = bottom;
     sign.group.scale.setScalar(s);
-    this.v1.set(0, (under + sign.height / 2) * s, 0).applyEuler(sign.group.rotation);
-    sign.group.position.set(0, bottom, back).add(this.v1);
+    sign.group.rotation.set(0, 0, 0);
+    sign.group.position.set(STAGE_WIDTH / 2 + signW / 2 - 0.11, bottom + signH / 2, front + 0.01);
     sign.group.visible = true;
     stage.add(sign.group);
-    const posts = sign.group.getObjectByName('shot-sign-posts');
+    stage.updateMatrixWorld(true);
+    sign.group.lookAt(stage.localToWorld(this.v1.copy(local)));
+    const posts = stage.getObjectByName('shot-sign-posts');
     if (posts) {
       posts.removeFromParent();
       posts.clear();
@@ -4395,21 +4399,18 @@ export class LightingLevelSystem extends createSystem({
     const postGroup = posts ?? new Group();
     postGroup.name = 'shot-sign-posts';
     const metal = new MeshStandardMaterial({ color: '#2a2b30', metalness: 0.5, roughness: 0.5 });
-    for (const side of [-1, 1]) {
-      // Up to the sign's face (the strip under it moved down onto the set).
-      const h = bottom + under * s - STAGE_HEIGHT + 0.01;
-      const post = new Mesh(new CylinderGeometry(0.004, 0.004, h, 8), metal);
-      post.position.set(side * ((sign.width * s) / 2 - 0.03), STAGE_HEIGHT + h / 2 - 0.005, back + 0.004);
-      postGroup.add(post);
-    }
+    // A short pipe up from the corner post to the sign.
+    const post = new Mesh(new CylinderGeometry(0.003, 0.003, 0.03, 8), metal);
+    post.position.set(STAGE_WIDTH / 2, STAGE_HEIGHT + 0.012, front);
+    postGroup.add(post);
     stage.add(postGroup);
+    const pitch = 0;
     sign.group.updateMatrixWorld(true);
     sign.group.getWorldPosition(this.signPos);
     sign.group.getWorldQuaternion(this.signQuat);
     // The strip: on the sign, right under the shots.
     const strip = this.strip!;
     // (It's a pressable entity, kept under the level root, so it follows the sign each frame.)
-    this.stripOnSign.set(0, -sign.height / 2 - stripGap - STRIP_H / 2, 0.001);
     // The tip card floats in the set, so nothing on set hides it.
     strip.mesh.renderOrder = 1003;
     (strip.mesh.material as MeshBasicMaterial).depthTest = false;
@@ -4600,7 +4601,7 @@ export class LightingLevelSystem extends createSystem({
     const sign = new ShotSign(this.targetShot.texture, this.ipad.liveMaterial, 16 / 9, true);
     // A dark box behind the face, so it reads as a real sign.
     const boxH = sign.height + 0.01;
-    const box = new Mesh(new BoxGeometry(Math.max(sign.width, STRIP_W) + 0.01, boxH, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));
+    const box = new Mesh(new BoxGeometry(sign.width + 0.01, boxH, 0.018), new MeshStandardMaterial({ color: '#17171a', roughness: 0.6 }));
     box.position.set(0, sign.height / 2 + 0.005 - boxH / 2, -0.0095);
     sign.group.add(box);
     this.sign = sign;
