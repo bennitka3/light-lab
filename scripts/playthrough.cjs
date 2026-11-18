@@ -16,6 +16,8 @@ const { chromium } = require('playwright');
   page.on('console', (m) => m.type() === 'error' && errors.push('console: ' + m.text()));
   await page.goto(url);
   await page.waitForFunction(() => window.lightLab, null, { timeout: 30000 });
+  // Slow software rendering can outlast the whole take; hold each scene on its Next scene button.
+  await page.evaluate(() => window.lightLab.setAutoNext(false));
   await page.waitForTimeout(2500);
   const lv = () => page.evaluate(() => window.lightLab.level());
   const log = (...a) => console.log(...a);

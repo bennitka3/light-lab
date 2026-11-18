@@ -4,6 +4,7 @@ import {
   BoxGeometry,
   CanvasTexture,
   Color,
+  ConeGeometry,
   CylinderGeometry,
   createSystem,
   DirectionalLight,
@@ -51,6 +52,7 @@ import { fitCarModel } from './scene-assets/beta-sets.js';
 import {
   createFixture,
   type FixtureKind,
+  CAMERA_POSITION,
   KIT_HEIGHT,
   KIT_Z,
   SILK_SIZE,
@@ -122,6 +124,8 @@ const ACTION_AT = 1.3;
  * 2026-11-16: no Roll button). He turns to you, says his line, then rolls.
  */
 const ROLL_DELAY = 3;
+/** Seconds after "Cut" before the next scene loads by itself (ben, 2026-11-18: no Next scene click). */
+const AUTO_NEXT_SECONDS = 4;
 /** How far (stage meters, 2 cm in the hand) a held light may drift after the match before it counts as moved. */
 const ROLL_MOVE_SLACK = 0.02;
 /** A blown take (you touched something while they rolled): when the actor blows up, and when it resets. */
@@ -184,9 +188,12 @@ const HUD_DESKTOP_DISTANCE = 0.6;
 const START_SPOT = { x: 0, z: 0.55 };
 /** The sign's bottom edge sits this far above your sightline to the back of the set floor. */
 const SIGN_CLEAR = 0.025;
+/** The sign's size on the back wall (ben, 2026-11-18: 0.75 and 0.9 a little too small). */
+const SIGN_SCALE = 1;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
 const PHONE_SPOT = new Vector3(0.36, 0.004, 0.385);
-const PHONE_SPOT_SCALE = 0.7;
+/** The phone lying on the craft services table: a real phone's size next to the crew (1/14 scale). */
+const PHONE_SPOT_SCALE = 0.07;
 /** A light's panel stays this long after the pointer leaves the light (seconds). */
 const PANEL_LINGER = 1.2;
 const PANEL_SCALE = 1.4;
@@ -288,6 +295,8 @@ function dimmerGain(level: number): number {
 const COACH_SKILLS = ['shots', 'house', 'look', 'switch', 'drag', 'raise', 'dimmer', 'phone'] as const;
 type CoachSkill = (typeof COACH_SKILLS)[number];
 type CoachLesson = { skill: CoachSkill; text: string };
+/** Lessons that are only reading: they wait for Got it instead of an action. */
+const COACH_READING = new Set<CoachSkill>(['shots']);
 
 type Fixture = {
   entity: Entity;
@@ -535,6 +544,19 @@ export class LightingLevelSystem extends createSystem({
   private hintShown = new Set<Fixture>();
   private hintHalo?: { fixture: Fixture; mesh: Mesh; home: MeshBasicMaterial; glow: MeshBasicMaterial };
   private hintPulse = 0;
+  /** The yellow arrow showing which way to move the light the tip is about. */
+  private moveArrow?: Group;
+  private arrowFixture?: Fixture;
+  private arrowHint = '';
+  private arrowTime = 0;
+  /** Texts on the phone when last placed, and how much buzz is left (seconds). */
+  private phoneSeen = 0;
+  private phoneBuzz = 0;
+  /** The light a brightness tip is about and which way (its panel shows, the button outlined). */
+  private dimCue?: Fixture;
+  private dimCueDir: 'dimmer' | 'brighter' = 'brighter';
+  /** The little YOUR SHOT monitor on a C-stand beside the film camera. */
+  private camMonitor?: Group;
   private hintRingFixture?: Fixture;
   private hintRingTime = 0;
   /** The name of the light the tip is about, shown in yellow on the strip. */
@@ -609,6 +631,10 @@ export class LightingLevelSystem extends createSystem({
   private retakeTarget = false;
   /** Seconds until the director rolls on a matched shot by himself, or -1. */
   private rollIn = -1;
+  /** Counts down from Cut to loading the next scene by itself; -1 when not counting. */
+  private nextIn = -1;
+  /** Tests that check the after-Cut page turn this off. */
+  private autoNext = true;
   /** Seconds since a take was blown (someone touched the set while rolling), or -1. */
   private blownTime = -1;
   /** The blown take happened mid-take (Cut, the actor blows up) rather than just before "Action!". */
@@ -691,6 +717,9 @@ export class LightingLevelSystem extends createSystem({
   private coachOnCount = 0;
   private coachOrbit = { yaw: 0, pitch: 0, radius: 0 };
   private coachPinned = false;
+  /** The player pressed Got it on a lesson that's just reading (ben, 2026-11-18: tutorial steps are click-through). */
+  private coachGotIt = false;
+  private coachHouse = true;
   private coachBox = new Box3();
   private lensWorld = new Vector3();
   private headWorld = new Vector3();
@@ -826,6 +855,7 @@ export class LightingLevelSystem extends createSystem({
       this.updateScore(delta);
       this.updateCoach(delta);
       this.updateHintRing(delta);
+      this.updateMoveArrow(delta);
       // Dee waits for the director to finish, then a beat more (ben, round 10: "give them room to breathe").
       if (this.bubble.speaking || this.pendingLine) this.phone.quietFor = Math.max(this.phone.quietFor, 1.2);
       // Texts about the house lights dim once they're off (and brighten again if they go back on).
@@ -940,6 +970,12 @@ export class LightingLevelSystem extends createSystem({
             });
           },
           pressCard: () => this.pressCard(),
+          // Off: the scene waits on its Next scene button after Cut (tests of that page).
+          setAutoNext: (on: boolean) => {
+            this.autoNext = on;
+            if (!on) this.nextIn = -1;
+            else if (this.phase === 'won' && this.takeTime >= TAKE_SECONDS && this.nextIn < 0) this.nextIn = AUTO_NEXT_SECONDS;
+          },
           // Seconds into the take after a win (-1 before Roll); finishTake jumps to the Cut.
           take: () => this.takeTime,
           finishTake: () => {
@@ -1063,6 +1099,7 @@ export class LightingLevelSystem extends createSystem({
           // Headset: what the sign, the strip and a light's panel show, and where they are.
           onSet: () => ({
             ready: this.dockReady,
+            phone: { at: this.phone.mesh.getWorldPosition(new Vector3()).toArray(), visible: this.phone.mesh.visible },
             sign: this.sign ? this.sign.group.position.toArray() : null,
             strip: this.strip ? this.strip.mesh.getWorldPosition(new Vector3()).toArray() : null,
             panel: this.panel?.group.visible && this.panelFixture ? { light: KIND_LABELS[this.panelFixture.item.kind], at: this.panel.group.getWorldPosition(new Vector3()).toArray(), linger: this.panelLinger } : null,
@@ -1135,6 +1172,7 @@ export class LightingLevelSystem extends createSystem({
 
   private loadLevel(index: number): void {
     this.unloadLevel();
+    this.nextIn = -1;
     this.hintShown.clear();
     this.hintRingFixture = undefined;
     this.hintHalo = undefined;
@@ -1542,6 +1580,9 @@ export class LightingLevelSystem extends createSystem({
           this.textDee();
         }
         break;
+      case 'playing':
+        if (this.coachStep && COACH_READING.has(this.coachStep.skill)) this.coachGotIt = true;
+        break;
       case 'won':
         // The take rolls by itself on a match (updateRoll); the button only appears after Cut.
         if (this.takeTime >= TAKE_SECONDS) {
@@ -1921,7 +1962,17 @@ export class LightingLevelSystem extends createSystem({
     }
     if (before < TAKE_SECONDS && this.takeTime >= TAKE_SECONDS && this.phase === 'won') {
       this.say('"...CUT! That\'s a print. Moving on."');
+      // The button stays as a skip; the next scene loads by itself a beat later.
       this.showPage({ eyebrow: this.sceneLabel(), body: '', button: 'Next scene' });
+      this.nextIn = this.autoNext ? AUTO_NEXT_SECONDS : -1;
+    }
+    if (this.nextIn > 0 && this.phase === 'won') {
+      this.nextIn -= delta;
+      if (this.nextIn <= 0) {
+        this.nextIn = -1;
+        devLog('next scene by itself after Cut');
+        this.pressCard();
+      }
     }
   }
 
@@ -3042,10 +3093,17 @@ export class LightingLevelSystem extends createSystem({
     }
     const { score, hint, fixture } = this.evaluate();
     this.noteHintLight(hint, fixture);
+    this.arrowFixture = fixture;
+    this.arrowHint = hint;
+    const dim = fixture ? /too (bright|dark)\./.exec(hint) : null;
+    this.dimCue = dim ? fixture : undefined;
+    if (dim) this.dimCueDir = dim[1] === 'bright' ? 'dimmer' : 'brighter';
     // No new match while the crew are still reacting to a blown take.
     this.holdTime = score >= this.level.winScore && this.blownTime < 0 ? this.holdTime + delta : 0;
     if (this.holdTime >= WIN_HOLD_SECONDS) {
       this.phase = 'won';
+      // You matched the shots, so you've got what they're for.
+      this.coachLearned.add('shots');
       // The scene's notes and nudges are done: they dim, the win texts arrive bright.
       this.phone.setStep(`won:${this.levelIndex}`);
       this.chime.play().catch(() => undefined);
@@ -3074,6 +3132,44 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /** The first time a tip names a light this scene: ring that light on the set for a few seconds. */
+  /**
+   * Points a yellow arrow from the tip's light the way the tip says to move it (ben, 2026-11-18:
+   * hints as arrows, in sync with the tip line). It shows only while the strip shows that tip.
+   */
+  private updateMoveArrow(delta: number): void {
+    const f = this.arrowFixture;
+    const show = this.dockReady && this.phase === 'playing' && !!f && this.tipMove.axis >= 0 && !this.ipad.coachText &&
+      /^(?:[A-Za-z-]+ looks good\. )?(Move|Nudge|Raise|Lower|Pull)\b/.test(this.arrowHint);
+    if (!show || !f) {
+      if (this.moveArrow) this.moveArrow.visible = false;
+      return;
+    }
+    if (!this.moveArrow) {
+      const mat = new MeshBasicMaterial({ color: '#f5d90a', transparent: true, opacity: 0.6, depthTest: false, depthWrite: false, toneMapped: false });
+      const arrow = new Group();
+      arrow.name = 'move-arrow';
+      const shaft = new Mesh(new CylinderGeometry(0.002, 0.002, 0.026, 10), mat);
+      shaft.position.y = 0.013;
+      const tip = new Mesh(new ConeGeometry(0.0055, 0.011, 16), mat);
+      tip.position.y = 0.0315;
+      for (const m of [shaft, tip]) {
+        m.renderOrder = 995;
+        (m as unknown as { pointerEvents: string }).pointerEvents = 'none';
+      }
+      arrow.add(shaft, tip);
+      this.moveArrow = arrow;
+    }
+    const arrow = this.moveArrow;
+    if (arrow.parent !== this.stage) this.stage.add(arrow);
+    arrow.visible = true;
+    this.arrowTime += delta;
+    this.v1.set(0, 0, 0);
+    this.v1.setComponent(this.tipMove.axis, this.tipMove.sign);
+    arrow.quaternion.setFromUnitVectors(Y_AXIS, this.v1);
+    const bob = 0.004 * (0.5 + 0.5 * Math.sin(this.arrowTime * 4));
+    arrow.position.copy(f.local).addScaledVector(this.v1, 0.024 + bob);
+  }
+
   private noteHintLight(hint: string, fixture: Fixture | undefined): void {
     const name = fixture ? KIND_NAMES[fixture.item.kind] : '';
     this.hintName = fixture && hint.toLowerCase().includes(name.toLowerCase()) ? name : '';
@@ -3335,7 +3431,8 @@ export class LightingLevelSystem extends createSystem({
       case 'dimmer':
         return this.coachDimmerFixture() !== undefined;
       case 'phone':
-        return this.phone.mesh.visible && this.phone.awake && !this.phone.pinned;
+        // In the headset the phone is an easter egg on the craft table (ben, 2026-11-18): no lesson.
+        return !this.dockReady && this.phone.mesh.visible && this.phone.awake && !this.phone.pinned;
     }
   }
 
@@ -3348,8 +3445,8 @@ export class LightingLevelSystem extends createSystem({
     switch (skill) {
       case 'shots':
         text = this.dockReady
-          ? "The sign over the stage: the director's TARGET, then YOUR SHOT, live. Make them match."
-          : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match.";
+          ? "The sign over the stage: the director's TARGET, then YOUR SHOT, live. Make them match. Pinch Got it."
+          : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match. Click Got it.";
         break;
       case 'house':
         text = `${press} HOUSE${trigger} to switch off the house lights.`;
@@ -3400,6 +3497,9 @@ export class LightingLevelSystem extends createSystem({
     }
     this.coachStep = { skill, text };
     this.coachTime = 0;
+    this.coachGotIt = false;
+    this.coachHouse = this.houseOn;
+    if (COACH_READING.has(skill)) this.showPage({ eyebrow: this.sceneLabel(), body: '', button: 'Got it' });
     if (this.coachFixture) this.coachStart.copy(this.coachFixture.local);
     this.coachDimmers = this.fixtures.map((f) => f.dimmer);
     this.coachStarts = this.fixtures.map((f) => f.local.clone());
@@ -3412,13 +3512,20 @@ export class LightingLevelSystem extends createSystem({
     devLog(`coach: ${skill}: ${text}`);
   }
 
-  /** Has the player done what the lesson asks? Reading-only lessons time out. */
+  /** Has the player done what the lesson asks? Reading-only lessons wait for Got it. */
   private coachDone(skill: CoachSkill): boolean {
     const t = this.coachTime;
     const f = this.coachFixture;
     switch (skill) {
       case 'shots':
-        return t > 7;
+        // Reading only: done when the player says so, not on a timer, or once they get to
+        // work anyway (flip the house lights, touch a light), so skipping it never blocks the game.
+        return (
+          this.coachGotIt ||
+          this.houseOn !== this.coachHouse ||
+          this.fixtures.filter((x) => x.on).length !== this.coachOnCount ||
+          this.fixtures.some((x, i) => x.dimmer !== this.coachDimmers[i] || (this.coachStarts[i] && x.local.distanceToSquared(this.coachStarts[i]) > 1e-6))
+        );
       case 'house':
         return !this.houseOn;
       case 'look':
@@ -3447,6 +3554,9 @@ export class LightingLevelSystem extends createSystem({
 
   private endCoachStep(learned: boolean): void {
     void learned;
+    if (this.coachStep && COACH_READING.has(this.coachStep.skill) && this.ipad.page.button === 'Got it') {
+      this.showPage({ eyebrow: this.sceneLabel(), body: '' });
+    }
     this.coachStep = null;
     this.coachFixture = undefined;
     this.coachRing.hide();
@@ -3722,6 +3832,7 @@ export class LightingLevelSystem extends createSystem({
     }
     sign.group.localToWorld(strip.mesh.position.copy(this.stripOnSign));
     strip.mesh.quaternion.copy(this.signQuat);
+    strip.mesh.scale.setScalar(SIGN_SCALE);
     if (!full) {
       const won = iPad.isWon;
       sign.setLabels(
@@ -3760,7 +3871,14 @@ export class LightingLevelSystem extends createSystem({
       phone.position.lerp(this.phoneSpotPos, follow);
       phone.quaternion.slerp(this.phoneSpotQuat, follow);
       if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
+      // A new text buzzes it on the table: a few little hops, for anyone observant.
+      if (this.phone.log.length > this.phoneSeen) this.phoneBuzz = 1.2;
+      if (this.phoneBuzz > 0) {
+        this.phoneBuzz -= delta;
+        phone.position.y = this.phoneSpotPos.y + Math.abs(Math.sin(this.phoneBuzz * 40)) * 0.0012 * Math.min(1, this.phoneBuzz);
+      }
     }
+    this.phoneSeen = this.phone.log.length;
   }
 
   /**
@@ -3773,7 +3891,9 @@ export class LightingLevelSystem extends createSystem({
     const step = this.coachStep?.skill;
     const coached = (step === 'switch' || step === 'dimmer') && this.coachFixture ? this.coachFixture : undefined;
     const pointed = this.fixtures.find((f) => !SHAPERS.has(f.item.kind) && (f.entity.hasComponent(Hovered) || f.entity.hasComponent(Grabbed)));
-    const wanted = pointed ?? coached;
+    // A brightness tip keeps that light's panel up, in sync with the tip line (ben, 2026-11-18).
+    const cued = this.dimCue && !this.ipad.coachText && this.phase === 'playing' ? this.dimCue : undefined;
+    const wanted = pointed ?? coached ?? cued;
     if (wanted) {
       this.panelFixture = wanted;
       this.panelLinger = Math.max(this.panelLinger, PANEL_LINGER);
@@ -3793,6 +3913,7 @@ export class LightingLevelSystem extends createSystem({
       on: f.on,
       dimmer: f.item.dimmer ? Math.round(f.dimmer * 100) : undefined,
       kelvin: f.item.dial ? f.kelvin : undefined,
+      cue: f === this.dimCue && !this.ipad.coachText && this.phase === 'playing' ? this.dimCueDir : undefined,
     });
     // Just over the light's head (its bounds take in its beam, so go by where the head is).
     this.v5.copy(f.local);
@@ -3900,23 +4021,25 @@ export class LightingLevelSystem extends createSystem({
     // The sign: centered over the front of the stage, its bottom just above your sightline to
     // the back of the set floor, so it never hides the set (and above the lighting grid).
     const sign = this.sign!;
-    const front = STAGE_DEPTH / 2;
+    // ben, 2026-11-18: "a little TOO high above us": the sign stands on the back wall's
+    // top edge, smaller, so it reads as "up there past the set" instead of over your head.
     const back = -STAGE_DEPTH / 2;
-    let sightY = STAGE_HEIGHT;
-    if (local.z > front + 0.05) sightY = local.y + ((0 - local.y) * (local.z - front)) / (local.z - back);
-    const bottom = MathUtils.clamp(sightY + SIGN_CLEAR, STAGE_HEIGHT + 0.05, Math.max(STAGE_HEIGHT + 0.05, local.y - 0.05));
-    // The strip (match bar and tip) hangs right under the shots, so the whole sign is taller.
+    const s = SIGN_SCALE;
+    const sightY = STAGE_HEIGHT;
+    // Its bottom just clears your sightline over the grid's front edge, so nothing covers the tip.
+    const front = STAGE_DEPTH / 2;
+    const overFront = local.y + ((STAGE_HEIGHT + 0.01 - local.y) * (local.z - back)) / Math.max(0.05, local.z - front);
+    const bottom = Math.max(STAGE_HEIGHT + 0.012, overFront + 0.006);
     const stripGap = 0.006;
     const under = STRIP_H + stripGap;
-    const centerY = bottom + (under + sign.height) / 2;
-    // Tipped back to face where you stand.
-    const pitch = Math.atan2(local.y - centerY, Math.max(0.1, local.z - front));
+    const centerY = bottom + ((under + sign.height) * s) / 2;
+    const pitch = Math.atan2(local.y - centerY, Math.max(0.1, local.z - back));
     sign.group.rotation.set(-pitch, 0, 0);
-    this.v1.set(0, under + sign.height / 2, 0).applyEuler(sign.group.rotation);
-    sign.group.position.set(0, bottom, front).add(this.v1);
+    sign.group.scale.setScalar(s);
+    this.v1.set(0, (under + sign.height / 2) * s, 0).applyEuler(sign.group.rotation);
+    sign.group.position.set(0, bottom, back).add(this.v1);
     sign.group.visible = true;
     stage.add(sign.group);
-    // Two posts from the side walls' front tops up to the sign.
     const posts = sign.group.getObjectByName('shot-sign-posts');
     if (posts) {
       posts.removeFromParent();
@@ -3928,7 +4051,7 @@ export class LightingLevelSystem extends createSystem({
     for (const side of [-1, 1]) {
       const h = bottom - STAGE_HEIGHT + 0.01;
       const post = new Mesh(new CylinderGeometry(0.004, 0.004, h, 8), metal);
-      post.position.set(side * (sign.width / 2 - 0.03), STAGE_HEIGHT + h / 2 - 0.005, front - 0.004);
+      post.position.set(side * ((sign.width * s) / 2 - 0.03), STAGE_HEIGHT + h / 2 - 0.005, back + 0.004);
       postGroup.add(post);
     }
     stage.add(postGroup);
@@ -3946,6 +4069,16 @@ export class LightingLevelSystem extends createSystem({
     this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
     stage.localToWorld(this.phoneSpotPos.copy(this.v1));
     stage.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -lean));
+    // The phone is an easter egg (ben, 2026-11-18): lying flat on the craft services table.
+    const table = this.world.scene.getObjectByName('craft-table');
+    if (table) {
+      // In the table's own (real-meter) frame: front edge, between the coffee urn and the donuts.
+      table.updateMatrixWorld(true);
+      table.localToWorld(this.v1.set(-0.2, 0.7605, 0.19));
+      this.phoneSpotPos.copy(this.v1);
+      table.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -Math.PI / 2 + 0.05));
+      devLog(`phone on the craft table at ${this.v1.toArray().map((n) => n.toFixed(3))}`);
+    }
     devLog(
       `on set: sign bottom ${bottom.toFixed(2)} m over the set floor (sightline ${sightY.toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°`,
     );
@@ -4036,6 +4169,46 @@ export class LightingLevelSystem extends createSystem({
 
   /** Builds the sign, the strip and the light panel once, with their press handlers. */
   private buildSetHud(): void {
+    // A small YOUR SHOT monitor on a C-stand beside the film camera, by the operator (ben, 2026-11-18).
+    if (!this.camMonitor) {
+      const stand = new Group();
+      stand.name = 'camera-side-monitor';
+      const metal = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
+      const top = CAMERA_POSITION[1] + 0.012;
+      // Three low, splayed legs (a C-stand's turtle base) and a riser up to the knuckle.
+      const legGeometry = new CylinderGeometry(0.0007, 0.0007, 0.03, 6);
+      for (let i = 0; i < 3; i++) {
+        const leg = new Mesh(legGeometry, metal);
+        const a = (i / 3) * Math.PI * 2 + 0.4;
+        leg.position.set(Math.sin(a) * 0.011, 0.007, Math.cos(a) * 0.011);
+        leg.rotation.set(Math.cos(a) * 1.1, 0, -Math.sin(a) * 1.1);
+        stand.add(leg);
+      }
+      const riser = new Mesh(new CylinderGeometry(0.0009, 0.0009, top - 0.008, 6), metal);
+      riser.position.y = 0.008 + (top - 0.008) / 2;
+      const knuckle = new Mesh(new CylinderGeometry(0.0018, 0.0018, 0.003, 8), metal);
+      knuckle.position.y = top;
+      // A short arm from the knuckle to the back of the monitor.
+      const arm = new Mesh(new CylinderGeometry(0.0006, 0.0006, 0.008, 6), metal);
+      arm.rotation.x = Math.PI / 2;
+      arm.position.set(0, top, -0.004);
+      stand.add(riser, knuckle, arm);
+      const w = 0.03;
+      const h = (w * 9) / 16;
+      const mon = new Group();
+      const frame = new Mesh(new BoxGeometry(w + 0.003, h + 0.003, 0.002), new MeshStandardMaterial({ color: '#111216', roughness: 0.6 }));
+      const screen = new Mesh(new PlaneGeometry(w, h), this.ipad.liveMaterial);
+      screen.position.z = 0.0011;
+      mon.add(frame, screen);
+      // Faces back toward the operator and you, tipped up a little.
+      mon.position.set(0, top + h / 2 + 0.002, 0.001);
+      mon.rotation.x = -0.25;
+      stand.add(mon);
+      stand.position.set(0.03, 0, 0.024);
+      stand.rotation.y = -0.35;
+      this.cameraRig.add(stand);
+      this.camMonitor = stand;
+    }
     if (this.sign) return;
     type Pressable = { addEventListener: (type: string, fn: (event: { point?: Vector3 }) => void) => void; pointerEventsOrder: number };
     // The sign's live picture is the iPad's own (so the creature feature shows there too).

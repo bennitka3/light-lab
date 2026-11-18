@@ -19,6 +19,8 @@ const { chromium } = require('playwright');
   page.on('console', (m) => m.type() === 'error' && errors.push('console: ' + m.text()));
   await page.goto(url);
   await page.waitForFunction(() => window.lightLab, null, { timeout: 30000 });
+  // These checks look at the page after Cut, so the next scene waits for its button here.
+  await page.evaluate(() => window.lightLab.setAutoNext(false));
   await page.waitForTimeout(2500);
   const api = (fn, arg) => page.evaluate(fn, arg);
   const at = (what) => api((w) => window.lightLab.screenOf(w), what);
@@ -360,6 +362,15 @@ const { chromium } = require('playwright');
   await api(() => window.lightLab.toggle('fresnel'));
   await wait(300);
   check('after Cut, touching a light is fine (the take is in the can)', (await state()).phase === 'won' && (await api(() => window.lightLab.card())).button === 'Next scene');
+  // ben, 2026-11-18: no Next scene click needed; a beat after Cut the next scene loads by itself.
+  {
+    const from = (await state()).index;
+    await api(() => window.lightLab.setAutoNext(true));
+    await api(() => window.lightLab.finishTake());
+    await page.waitForFunction((i) => window.lightLab.level().index !== i, from, { timeout: 30000 }).catch(() => {});
+    check('the next scene loads by itself after Cut', (await state()).index === from + 1, await state());
+    await api(() => window.lightLab.setAutoNext(false));
+  }
   // Before "Action!" a touch only gets a warning, and the roll is called off.
   await api(() => window.lightLab.loadLevelId('key-back-dimmer'));
   await wait(400);
