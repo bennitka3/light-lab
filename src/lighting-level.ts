@@ -305,11 +305,15 @@ function dimmerGain(level: number): number {
 }
 
 /** The controls the coach teaches, in the order it teaches them. */
-const COACH_SKILLS = ['shots', 'house', 'look', 'switch', 'drag', 'raise', 'dimmer', 'phone'] as const;
+const COACH_SKILLS = ['moveset', 'shots', 'house', 'look', 'switch', 'drag', 'raise', 'dimmer', 'phone'] as const;
 type CoachSkill = (typeof COACH_SKILLS)[number];
 type CoachLesson = { skill: CoachSkill; text: string };
 /** Lessons that are only reading: they wait for Got it instead of an action. */
-const COACH_READING = new Set<CoachSkill>(['shots']);
+const COACH_READING = new Set<CoachSkill>(['shots', 'moveset']);
+/** Headset: the grab spot on the floor for sliding the whole set (stage meters), its size, and how far the set can go. */
+const SET_PAD_AT = new Vector3(-0.15, 0.002, 0.2 + 0.05);
+const SET_PAD_SIZE = 0.06;
+const SET_SLIDE_MAX = 0.35;
 
 type Fixture = {
   entity: Entity;
@@ -594,6 +598,12 @@ export class LightingLevelSystem extends createSystem({
   private stripOnSign = new Vector3();
   /** The tip card was up last frame (so it glides instead of jumping when its subject changes). */
   private cardShown = false;
+  /** Headset: the floor spot you pinch and drag to slide the whole set, and the drag in progress. */
+  private setPad?: Mesh;
+  private setDrag: { hand: 'left' | 'right'; grab: Vector3 } | null = null;
+  private setMoved = false;
+  private playerHome = new Vector3();
+  private prevSelect = { left: false, right: false };
   /** Times the phone has pinged this session (at most two), and a hop is due on the table. */
   private phonePings = 0;
   private phoneHop = false;
@@ -1159,6 +1169,13 @@ export class LightingLevelSystem extends createSystem({
             this.panelFixture = this.fixtures[kit];
             this.panelLinger = 600;
           },
+          // Headset: the set grab spot's world position, the player's position, and whether the set was moved.
+          setPad: () => ({
+            at: this.setPad ? this.setPad.getWorldPosition(new Vector3()).toArray() : null,
+            player: this.world.player.position.toArray(),
+            moved: this.setMoved,
+            dragging: Boolean(this.setDrag),
+          }),
           xrStatus: () => this.xrStatus,
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -3589,6 +3606,8 @@ export class LightingLevelSystem extends createSystem({
   private coachNeeded(skill: CoachSkill): boolean {
     const movable = !this.level.locked && this.fixtures.some((f) => !SHAPERS.has(f.item.kind));
     switch (skill) {
+      case 'moveset':
+        return this.dockReady && Boolean(this.setPad);
       case 'shots':
         return !IS_RESULT;
       case 'house':
@@ -3616,6 +3635,9 @@ export class LightingLevelSystem extends createSystem({
     let text = '';
     this.coachFixture = undefined;
     switch (skill) {
+      case 'moveset':
+        text = 'Pinch and drag this spot to slide the whole set closer or farther.';
+        break;
       case 'shots':
         text = this.dockReady
           ? "This is the director's TARGET. Make the live set look like it."
@@ -3691,6 +3713,8 @@ export class LightingLevelSystem extends createSystem({
     const t = this.coachTime;
     const f = this.coachFixture;
     switch (skill) {
+      case 'moveset':
+        return this.coachGotIt || this.setMoved;
       case 'shots':
         // Reading only: done when the player says so, not on a timer, or once they get to
         // work anyway (flip the house lights, touch a light), so skipping it never blocks the game.
@@ -3753,6 +3777,9 @@ export class LightingLevelSystem extends createSystem({
       return;
     }
     switch (skill) {
+      case 'moveset':
+        ring.hide();
+        break;
       case 'shots': {
         // Both shots in one ring: they're the pair to compare.
         const a = ipad.frameOf('target');
@@ -3814,6 +3841,10 @@ export class LightingLevelSystem extends createSystem({
     const sign = this.sign;
     const strip = this.strip;
     const panel = this.panel;
+    if (skill === 'moveset' && this.setPad) {
+      ring.ring(this.setPad, 0, 0, SET_PAD_SIZE, SET_PAD_SIZE, 0.0025, true, 0);
+      return;
+    }
     if (skill === 'shots' && sign) {
       const a = sign.targetFrame;
       const b = sign.liveFrame;
@@ -4142,7 +4173,11 @@ export class LightingLevelSystem extends createSystem({
     const halfW = (CARD_W * CARD_SCALE) / 2;
     const at = this.v6;
     const sign = this.sign;
-    if (skill === 'shots' && sign) {
+    if (skill === 'moveset') {
+      // Just over the grab spot on the floor.
+      at.copy(SET_PAD_AT);
+      at.y += 0.1;
+    } else if (skill === 'shots' && sign) {
       // Beside the TARGET sign's lower inner corner, just over the set's front edge.
       const sp = sign.group.position;
       const sw = sign.width * sign.group.scale.x;
@@ -4248,6 +4283,79 @@ export class LightingLevelSystem extends createSystem({
     this.cameraRig?.traverse((child) => {
       (child as unknown as { pointerEvents: string }).pointerEvents = 'none';
     });
+  }
+
+  /**
+   * Headset: a small grab spot on the studio floor by the director (ben, 2026-11-18 morning):
+   * pinch it and drag to slide the whole set closer or farther, for when it's too close or too
+   * far after you put the headset down. The floor point you grabbed stays under your pointer.
+   */
+  private buildSetPad(): void {
+    if (this.setPad) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(30,31,36,0.9)';
+      ctx.beginPath();
+      ctx.arc(128, 128, 124, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(245,217,10,0.55)';
+      ctx.lineWidth = 8;
+      ctx.stroke();
+      // Four arrows out from the middle: "move".
+      ctx.fillStyle = 'rgba(235,235,240,0.85)';
+      ctx.strokeStyle = 'rgba(235,235,240,0.85)';
+      ctx.lineWidth = 12;
+      ctx.lineCap = 'round';
+      for (let i = 0; i < 4; i++) {
+        ctx.save();
+        ctx.translate(128, 128);
+        ctx.rotate((i * Math.PI) / 2);
+        ctx.beginPath();
+        ctx.moveTo(0, 18);
+        ctx.lineTo(0, 70);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, 98);
+        ctx.lineTo(-22, 66);
+        ctx.lineTo(22, 66);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    const texture = new CanvasTexture(canvas);
+    texture.colorSpace = SRGBColorSpace;
+    const pad = new Mesh(new PlaneGeometry(SET_PAD_SIZE, SET_PAD_SIZE), new MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false, depthWrite: false }));
+    pad.name = 'set-grab-pad';
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.copy(SET_PAD_AT);
+    pad.renderOrder = 2;
+    (pad as unknown as { pointerEvents: string }).pointerEvents = 'none';
+    this.stage.add(pad);
+    this.setPad = pad;
+  }
+
+  /** While a hand holds the grab spot: slide the player so the grabbed floor point stays under its ray. */
+  private dragSet(): void {
+    const drag = this.setDrag;
+    if (!drag) return;
+    const o = this.rayOrigin;
+    const d = this.rayDir;
+    if (d.y > -0.05) return;
+    const t = (drag.grab.y - o.y) / d.y;
+    const player = this.world.player;
+    player.position.x += drag.grab.x - (o.x + d.x * t);
+    player.position.z += drag.grab.z - (o.z + d.z * t);
+    const dx = player.position.x - this.playerHome.x;
+    const dz = player.position.z - this.playerHome.z;
+    const len = Math.hypot(dx, dz);
+    if (len > SET_SLIDE_MAX) {
+      player.position.x = this.playerHome.x + (dx * SET_SLIDE_MAX) / len;
+      player.position.z = this.playerHome.z + (dz * SET_SLIDE_MAX) / len;
+    }
   }
 
   /** Redraws the camera monitor's match bar when the match changes. */
@@ -4372,6 +4480,25 @@ export class LightingLevelSystem extends createSystem({
       space.getWorldDirection(this.rayDir).negate();
       const hit = this.hudUnderRay();
       if (hit?.what === 'panel') this.panelHot = true;
+      // The floor grab spot: pinch on it and drag to slide the whole set.
+      const select = source.gamepad?.buttons[0]?.pressed ?? false;
+      const wasSelect = this.prevSelect[hand];
+      this.prevSelect[hand] = select;
+      if (this.setDrag && this.setDrag.hand === hand) {
+        if (!select) {
+          this.setDrag = null;
+          this.setMoved = true;
+          devLog('moved the set');
+        } else {
+          this.dragSet();
+        }
+      } else if (!this.setDrag && select && !wasSelect && !hit && !holding && this.setPad?.visible) {
+        const padHit = this.hudRaycaster.intersectObject(this.setPad, false)[0];
+        if (padHit) {
+          this.setDrag = { hand, grab: padHit.point.clone() };
+          devLog('grabbed the set');
+        }
+      }
       const squeeze = source.gamepad?.buttons[1]?.pressed ?? false;
       const drag = this.hudDrag;
       if (drag && drag.hand === hand) {
@@ -4435,6 +4562,8 @@ export class LightingLevelSystem extends createSystem({
     if (session && session.environmentBlendMode === 'opaque') this.world.scene.background = this.backdrop;
     stage.updateMatrixWorld(true);
     this.placeViewer();
+    this.playerHome.copy(this.world.player.position);
+    this.buildSetPad();
     const local = this.dockTmp.copy(VIEW_AT);
     // The TARGET sign hangs off the set's top front corner toward craft services, just above the
     // front edge, turned to face you (ben, 2026-11-18 morning: up on the back wall you had to
