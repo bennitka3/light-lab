@@ -150,11 +150,7 @@ const TIP_STEP = 0.015;
 // A light raised this high hangs from the grid instead of standing on the floor
 // (its pipe runs up, out of the shot, like a real studio's overhead lights).
 const HANG_HEIGHT = 0.17;
-// How long a light must sit in the shot before Dee texts about it, and how long
-// a hint must stay the same before Dee texts it as a nudge.
-// (Headset playtest: a text every time a light crossed the frame crowded the view,
-// so Dee waits until it has really been parked there, and texts once per light per scene.)
-const IN_FRAME_TEXT_SECONDS = 10;
+// How long a hint must stay the same before Dee nudges (the house lights only, now).
 const NUDGE_SECONDS = 14;
 /** Dee only mentions the house lights once the player is this far into a scene. */
 const HOUSE_NUDGE_SECONDS = 20;
@@ -189,6 +185,15 @@ const DOCK_ABOVE_WALLS = 0.03;
 const DOCK_XR_SCALE = 1.75;
 const DOCK_FULL_XR_SCALE = 1.9;
 const Y_AXIS = new Vector3(0, 1, 0);
+// The Video Village cart beside the set (ben, 2026-11-17): the phone and a handheld iPad lie
+// on it. Tap either to bring it up in front of you like before; tap again (or Put down) to
+// set it back. Squeeze and drag a held one to move it in your view; that spot is remembered.
+/** How far out from the set's side wall the cart stands, toward the director (meters). */
+const CART_OUT = 0.2;
+const CART_TOP = new Vector3(0.3, 0.018, 0.2);
+/** The iPad on the cart: about 24 cm wide, like a real one. */
+const CART_IPAD_SCALE = 0.6;
+const HELD_KEY = 'lightLab.heldOffsets';
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
@@ -364,6 +369,27 @@ function itemName(item: KitItem): string {
 
 const ZOOM_KEY = 'lightLab.ipadZoom';
 
+/** Where you last dragged the held iPad and phone to (head space), or the defaults. */
+function loadHeldOffsets(): { ipad: Vector3; phone: Vector3 } {
+  const offsets = { ipad: HUD_IPAD_OFFSET.clone(), phone: HUD_PHONE_AWAKE_OFFSET.clone() };
+  try {
+    const saved = JSON.parse(localStorage.getItem(HELD_KEY) ?? 'null') as { ipad?: number[]; phone?: number[] } | null;
+    if (saved?.ipad?.length === 3) offsets.ipad.fromArray(saved.ipad);
+    if (saved?.phone?.length === 3) offsets.phone.fromArray(saved.phone);
+  } catch {
+    // No storage (private window): the defaults.
+  }
+  return offsets;
+}
+
+function saveHeldOffsets(offsets: { ipad: Vector3; phone: Vector3 }): void {
+  try {
+    localStorage.setItem(HELD_KEY, JSON.stringify({ ipad: offsets.ipad.toArray(), phone: offsets.phone.toArray() }));
+  } catch {
+    // No storage: it just isn't remembered.
+  }
+}
+
 /** The iPad size the player picked last time (1 = default). */
 function loadZoom(): number {
   try {
@@ -472,8 +498,30 @@ export class LightingLevelSystem extends createSystem({
   private dockQuat = new Quaternion();
   private dockStand?: Object3D;
   private dockFacer = new Object3D();
+  private cartObject?: Object3D;
   private dockTmp = new Vector3();
   private dockDir = new Vector3();
+  /** Headset: you've picked the handheld iPad up off the cart (the monitor shows a mirror of it). */
+  private ipadHeld = false;
+  /** The monitor while the iPad is in your hand, and the iPad lying on the cart: copies that share its pictures. */
+  private monitorMirror?: Object3D;
+  private cartIpad?: Object3D;
+  private cartIpadEntity?: Entity;
+  /** [original, copy, copy] meshes whose visibility the copies follow (the shots hide on full pages). */
+  private mirrorPairs: Object3D[][] = [];
+  private cartPhonePos = new Vector3();
+  private cartPhoneQuat = new Quaternion();
+  private cartIpadPos = new Vector3();
+  private cartIpadQuat = new Quaternion();
+  /** Where the held iPad and phone ride in front of your eyes (head space); you can drag them. */
+  private heldOffsets = loadHeldOffsets();
+  /** Is each hand's near-grab on? Off while its ray points at the iPad or phone, so they win (ben, 2026-11-17). */
+  private grabOn = { left: true, right: true };
+  /** A held iPad or phone being dragged to a new spot with the squeeze. */
+  private hudDrag: { hand: 'left' | 'right'; what: 'ipad' | 'phone'; distance: number } | null = null;
+  private rayOrigin = new Vector3();
+  private rayDir = new Vector3();
+  private hudRaycaster = new Raycaster();
   /** The director's brief, held until the coach has nothing left to teach (ben, 2026-11-17). */
   private briefPending = false;
   private hudScale = 1;
@@ -540,8 +588,6 @@ export class LightingLevelSystem extends createSystem({
 
   // Dee's texts: a light in the shot, or a hint that hasn't changed in a while.
   private inFrameTime = 0;
-  /** Lights Dee has already texted about being in the shot, this scene. */
-  private inFrameTexted = new Set<Fixture>();
   private inFrameFixture: Fixture | undefined;
   private hintSince = 0;
   private lastHint = '';
@@ -740,6 +786,7 @@ export class LightingLevelSystem extends createSystem({
     this.phone.setResolved('house', !this.houseOn);
     this.phone.update(delta);
       this.scrollPhoneWithThumbstick(delta);
+      this.updateHudRays();
       this.placeHud(delta);
       this.updateHoverTag();
     } catch (error) {
@@ -964,6 +1011,11 @@ export class LightingLevelSystem extends createSystem({
             return { at: at.toArray(), rig: this.cameraRig.position.toArray() };
           },
           enterXR: () => this.enterHeadset(),
+          // Headset: the "Put down" button the held iPad shows (to look at its layout in the browser).
+          putDownButton: (on: boolean) => {
+            this.ipad.setVrButton(!on && this.canEnterXR && !this.immersive);
+            this.ipad.setPutDownButton(on);
+          },
           xrStatus: () => this.xrStatus,
           // Where the lower third and phone sit relative to the viewer's head (meters).
           hud: () => {
@@ -1041,7 +1093,6 @@ export class LightingLevelSystem extends createSystem({
     this.houseNudged = false;
     this.holdTime = 0;
     this.inFrameTime = 0;
-    this.inFrameTexted.clear();
     this.hintSince = 0;
     this.lastHint = '';
     this.framesSinceLoad = 0;
@@ -1391,9 +1442,14 @@ export class LightingLevelSystem extends createSystem({
     };
   }
 
-  /** Dee's notes for this scene: why the lights go where they go. */
+  /**
+   * Dee's note for this scene: the one line on why the lights go where they go. Just the
+   * first (ben, 2026-11-17: "fewer messages... less information from Dee, more from the
+   * iPad"); the iPad's tip says what to do next.
+   */
   private textDee(): void {
-    for (const line of this.level.dee) this.phone.text('dee', line);
+    const line = this.level.dee[0];
+    if (line) this.phone.text('dee', line);
   }
 
   /** Moves the story on: the title starts scene 1, a won scene goes to the next one. */
@@ -1406,12 +1462,13 @@ export class LightingLevelSystem extends createSystem({
       case 'title':
         this.phase = 'playing';
         this.showBriefCard();
+        // One text from Dee, not five (ben, 2026-11-17: "D is sending me 15,000 messages").
+        // The first scene's lessons are the coach's job, on the iPad.
         if (this.levelIndex === 0) {
-          this.phone.text('dee', 'wait. is that YOU holding a light?? 😂');
-          this.phone.text('dee', "ok don't panic. I'm in video village, I'll coach you");
-          this.phone.text('dee', 'iPad: left = the shot the director wants, right = your camera. match them');
+          this.phone.text('dee', "wait. is that YOU holding a light?? 😂 don't panic. I'm in video village. do what the iPad says");
+        } else {
+          this.textDee();
         }
-        this.textDee();
         break;
       case 'won':
         // The take rolls by itself on a match (updateRoll); the button only appears after Cut.
@@ -1559,6 +1616,8 @@ export class LightingLevelSystem extends createSystem({
       steps: [
         'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
         'Each control lights up in yellow, here or on set, the first time you need it.',
+        // Headset: this page is on the Video Village monitor; the cart holds a handheld copy.
+        ...(headset ? ['Want it in your hand? Point at the iPad on the cart and pull the trigger.'] : []),
       ],
       footer: IS_RESULT && !this.xrStatus
         ? 'RESULT BETA: one scene, judged only by how your shot looks. Any lights, anywhere. No bar.'
@@ -2067,6 +2126,8 @@ export class LightingLevelSystem extends createSystem({
       this.enterHeadset();
     } else if (control.type === 'size') {
       this.zoomIpad(control.step);
+    } else if (control.type === 'putDown') {
+      this.holdIpad(false);
     } else if (control.type === 'light') {
       const target = this.buttonTargets[control.index];
       if (target === 'house') {
@@ -2885,7 +2946,8 @@ export class LightingLevelSystem extends createSystem({
       this.phone.dropPending();
       for (const fixture of this.fixtures) fixture.rollFrom.copy(fixture.local);
       const retry = this.wonOnce;
-      if (!retry) this.phone.text('dee', this.pickDeeWin());
+      // One text on a win: the scene's gossip if it has some, otherwise a cheer.
+      if (!retry && !this.level.after) this.phone.text('dee', this.pickDeeWin());
       this.showWinCard(retry);
       if (!retry) {
         for (const text of this.level.texts ?? []) {
@@ -2913,10 +2975,8 @@ export class LightingLevelSystem extends createSystem({
       if (framed) this.phone.setResolved(framed, false);
     }
     this.inFrameFixture = framed;
-    if (framed && this.inFrameTime > IN_FRAME_TEXT_SECONDS && !this.inFrameTexted.has(framed)) {
-      this.inFrameTexted.add(framed);
-      this.phone.text('dee', `dude the ${itemName(framed.item)} is IN THE SHOT 😬 I can see it on the monitor`, framed);
-    }
+    // No "it's IN THE SHOT" text any more (ben, 2026-11-17: too many pings): the iPad's tip
+    // already names the light that's in the shot, and the match stays capped until it's out.
     this.sinceNudge += delta;
     this.sceneTime += delta;
     // The quiet gotcha (LevelDef.houseHint 'ambient'): the tip only says "too much
@@ -3161,7 +3221,11 @@ export class LightingLevelSystem extends createSystem({
         break;
       }
       case 'phone':
-        text = vr ? 'Dee texts you why. Point at the phone and pull the trigger to keep it up.' : 'Dee texts you why. Click the phone to keep it up.';
+        text = !vr
+          ? 'Dee texts you why. Click the phone to keep it up.'
+          : this.dockReady
+          ? 'Dee texted you. Point at the phone on the cart and pull the trigger to pick it up.'
+          : 'Dee texts you why. Point at the phone and pull the trigger to keep it up.';
         break;
     }
     this.coachStep = { skill, text };
@@ -3386,24 +3450,19 @@ export class LightingLevelSystem extends createSystem({
       this.hudTarget.copy(full ? HUD_IPAD_FULL_OFFSET : HUD_IPAD_OFFSET);
       camera.localToWorld(this.hudTarget);
       if (this.dockReady) {
-        // On the stand: fixed in the room, its bottom edge on the stand, bigger than in hand.
-        const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE * zoom;
-        ipad.scale.setScalar(scale);
-        ipad.quaternion.copy(this.dockQuat);
-        this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
-        ipad.position.copy(this.dockBottom).add(this.v1);
+        this.placeVideoVillage(full, zoom, follow, bounce);
       } else {
         ipad.position.lerp(this.hudTarget, follow);
         ipad.lookAt(this.headWorld);
+        // Up near the middle of the view while awake, down beside the iPad when tucked.
+        // A bigger iPad pushes the phone out to keep them side by side.
+        this.hudTarget.lerpVectors(HUD_PHONE_AWAKE_OFFSET, HUD_PHONE_OFFSET, this.phoneTuck);
+        this.hudTarget.x *= 0.5 + 0.5 * zoom;
+        this.hudTarget.y += bounce;
+        camera.localToWorld(this.hudTarget);
+        phone.position.lerp(this.hudTarget, follow);
+        phone.lookAt(this.headWorld);
       }
-      // Up near the middle of the view while awake, down beside the iPad when tucked.
-      // A bigger iPad pushes the phone out to keep them side by side.
-      this.hudTarget.lerpVectors(HUD_PHONE_AWAKE_OFFSET, HUD_PHONE_OFFSET, this.phoneTuck);
-      this.hudTarget.x *= 0.5 + 0.5 * zoom;
-      this.hudTarget.y += bounce;
-      camera.localToWorld(this.hudTarget);
-      phone.position.lerp(this.hudTarget, follow);
-      phone.lookAt(this.headWorld);
     }
     // The speech bubble floats over the director and turns to face you.
     if (this.director) {
@@ -3417,6 +3476,128 @@ export class LightingLevelSystem extends createSystem({
     this.castBubble.mesh.position.copy(this.castBubbleAt);
     camera.getWorldQuaternion(this.castBubble.mesh.quaternion);
     this.castBubble.update(delta);
+  }
+
+  /**
+   * Headset, once Video Village is set up: the monitor on its stand (the iPad itself, or its
+   * mirror while you hold the iPad), the held iPad and phone in front of you, and whatever
+   * isn't in your hand lying on the cart.
+   */
+  private placeVideoVillage(full: boolean, zoom: number, follow: number, bounce: number): void {
+    const camera = this.world.camera;
+    const ipad = this.ipad.object;
+    const phone = this.phone.mesh;
+    const held = this.ipadHeld;
+    const monitor = held && this.monitorMirror ? this.monitorMirror : ipad;
+    const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE * zoom;
+    monitor.scale.setScalar(scale);
+    monitor.quaternion.copy(this.dockQuat);
+    this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
+    monitor.position.copy(this.dockBottom).add(this.v1);
+    if (this.monitorMirror) this.monitorMirror.visible = held;
+    if (this.cartIpad) this.cartIpad.visible = !held;
+    for (const pair of this.mirrorPairs) {
+      pair[1].visible = pair[0].visible;
+      pair[2].visible = pair[0].visible;
+    }
+    if (held) {
+      // In your hand, where you left it last (drag it with the squeeze to move it).
+      ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
+      this.hudTarget.copy(this.heldOffsets.ipad);
+      camera.localToWorld(this.hudTarget);
+      ipad.position.lerp(this.hudTarget, follow);
+      ipad.lookAt(this.headWorld);
+    }
+    if (this.phone.pinned) {
+      // Picked up: in front of you, where you left it last.
+      phone.scale.setScalar(HUD_PHONE_AWAKE_XR_SCALE * zoom);
+      this.hudTarget.copy(this.heldOffsets.phone);
+      this.hudTarget.y += bounce;
+      camera.localToWorld(this.hudTarget);
+      phone.position.lerp(this.hudTarget, follow);
+      phone.lookAt(this.headWorld);
+    } else {
+      // Lying on the cart; a new text lights it up there.
+      phone.scale.setScalar(1);
+      phone.position.lerp(this.cartPhonePos, follow);
+      phone.quaternion.slerp(this.cartPhoneQuat, follow);
+      if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
+    }
+  }
+
+  /** Headset: picks the handheld iPad up off the cart, or puts it back on the monitor. */
+  private holdIpad(held: boolean): void {
+    if (held === this.ipadHeld) return;
+    this.ipadHeld = held;
+    this.ipad?.setPutDownButton(held);
+    devLog(held ? 'picked up the iPad' : 'put the iPad down');
+  }
+
+  /**
+   * Headset: which held thing (or the monitor) a hand's ray points at. While it points at one,
+   * that hand's near-grab is off, so a press lands on the iPad or phone and never on a light
+   * behind it near your hand (ben, 2026-11-17: close to the set, the iPad didn't register).
+   * Squeeze while pointing at the held iPad or phone and drag to move it in your view.
+   */
+  private updateHudRays(): void {
+    const session = this.immersive ? this.world.renderer.xr.getSession() : null;
+    if (!session) {
+      this.hudDrag = null;
+      return;
+    }
+    let holding = false;
+    for (const fixture of this.fixtures) if (fixture.entity.hasComponent(Grabbed)) holding = true;
+    for (const source of session.inputSources) {
+      const hand = source.handedness;
+      if (hand !== 'left' && hand !== 'right') continue;
+      const space = this.world.player.raySpaces[hand];
+      if (!space) continue;
+      space.getWorldPosition(this.rayOrigin);
+      space.getWorldDirection(this.rayDir).negate();
+      const hit = this.hudUnderRay();
+      const squeeze = source.gamepad?.buttons[1]?.pressed ?? false;
+      const drag = this.hudDrag;
+      if (drag && drag.hand === hand) {
+        if (!squeeze) {
+          this.hudDrag = null;
+          saveHeldOffsets(this.heldOffsets);
+          devLog(`moved the ${drag.what}`);
+        } else {
+          this.v1.copy(this.rayOrigin).addScaledVector(this.rayDir, drag.distance);
+          this.world.camera.worldToLocal(this.v1);
+          this.heldOffsets[drag.what].copy(this.v1);
+        }
+      } else if (!drag && squeeze && hit && !holding) {
+        const what = hit.what === 'phone' && this.phone.pinned ? 'phone' : hit.what === 'ipad' && this.ipadHeld ? 'ipad' : null;
+        if (what) this.hudDrag = { hand, what, distance: hit.distance };
+      }
+      const wantGrab = holding || (!hit && this.hudDrag?.hand !== hand);
+      if (wantGrab !== this.grabOn[hand]) {
+        this.grabOn[hand] = wantGrab;
+        this.input.xr.multiPointers[hand].toggleSubPointer('grab', wantGrab);
+      }
+    }
+  }
+
+  /** What the ray (rayOrigin, rayDir) hits first among the iPad, the phone and the cart's iPad. */
+  private hudUnderRay(): { what: 'ipad' | 'phone' | 'cart'; distance: number } | null {
+    const ray = this.hudRaycaster;
+    ray.set(this.rayOrigin, this.rayDir);
+    ray.far = 4;
+    let best: { what: 'ipad' | 'phone' | 'cart'; distance: number } | null = null;
+    const ipadHit = ray.intersectObject(this.ipad.object, true)[0];
+    if (ipadHit && this.ipad.contains(this.ipad.object.worldToLocal(this.v2.copy(ipadHit.point)).y)) {
+      best = { what: 'ipad', distance: ipadHit.distance };
+    }
+    if (this.phone.mesh.visible) {
+      const phoneHit = ray.intersectObject(this.phone.mesh, false)[0];
+      if (phoneHit && (!best || phoneHit.distance < best.distance)) best = { what: 'phone', distance: phoneHit.distance };
+    }
+    if (this.cartIpad?.visible) {
+      const cartHit = ray.intersectObject(this.cartIpad, true)[0];
+      if (cartHit && (!best || cartHit.distance < best.distance)) best = { what: 'cart', distance: cartHit.distance };
+    }
+    return best;
   }
 
   /**
@@ -3444,6 +3625,7 @@ export class LightingLevelSystem extends createSystem({
     this.dockQuat.copy(facer.quaternion);
     this.buildDockStand();
     this.placeDockStand();
+    this.setUpCart(toSet);
     // Turn your view about your head (the room's origin turns, the set stays put) so you
     // face the set, with the monitor just above it.
     this.world.camera.getWorldDirection(this.dockDir);
@@ -3470,6 +3652,100 @@ export class LightingLevelSystem extends createSystem({
       player.rotation.set(0, 0, 0);
     }
     if (this.dockStand) this.dockStand.visible = false;
+    if (this.cartObject) this.cartObject.visible = false;
+    if (this.cartIpad) this.cartIpad.visible = false;
+    if (this.monitorMirror) this.monitorMirror.visible = false;
+    this.holdIpad(false);
+    this.hudDrag = null;
+    for (const hand of ['left', 'right'] as const) {
+      if (!this.grabOn[hand]) {
+        this.grabOn[hand] = true;
+        this.input.xr.multiPointers[hand].toggleSubPointer('grab', true);
+      }
+    }
+  }
+
+  /**
+   * The Video Village cart, beside the set on the director's side: the phone lies on it, and
+   * the handheld iPad leans on a little easel. Both face you.
+   */
+  private setUpCart(toSet: Vector3): void {
+    const head = this.headWorld;
+    const side = new Vector3().copy(toSet).applyAxisAngle(Y_AXIS, Math.PI / 2);
+    const center = this.stage.getWorldPosition(new Vector3());
+    const topY = center.y - 0.004;
+    center.addScaledVector(side, STAGE_WIDTH / 2 + CART_OUT).addScaledVector(toSet, -0.04);
+    const facer = this.dockFacer;
+    if (!this.cartObject) {
+      const cart = new Group();
+      cart.name = 'video-village-cart';
+      const top = new Mesh(new BoxGeometry(CART_TOP.x, CART_TOP.y, CART_TOP.z), new MeshStandardMaterial({ color: '#2b2c30', roughness: 0.7 }));
+      top.name = 'cart-top';
+      cart.add(top);
+      const legMaterial = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
+      for (let i = 0; i < 4; i++) {
+        const leg = new Mesh(new CylinderGeometry(0.008, 0.008, 1, 8), legMaterial);
+        leg.name = 'cart-leg';
+        leg.position.set((i % 2 ? 1 : -1) * (CART_TOP.x / 2 - 0.02), 0, (i < 2 ? 1 : -1) * (CART_TOP.z / 2 - 0.02));
+        cart.add(leg);
+      }
+      this.cartObject = cart;
+      this.world.createTransformEntity(cart);
+      // The iPad on the cart and the monitor's mirror: copies of the iPad that share its pictures.
+      const visuals = this.ipad.object.children.filter((c) => c.name !== 'ipad-hit' && !c.name.startsWith('coach'));
+      const cartIpad = new Group();
+      cartIpad.name = 'cart-ipad';
+      const mirror = new Group();
+      mirror.name = 'monitor-mirror';
+      for (const visual of visuals) {
+        const a = visual.clone(false);
+        const b = visual.clone(false);
+        // The cart's copy sits among real things, so it hides behind them (the iPad itself draws on top).
+        if (a instanceof Mesh && a.material instanceof MeshBasicMaterial) {
+          a.material = a.material.clone();
+          a.material.depthTest = true;
+        }
+        cartIpad.add(a);
+        mirror.add(b);
+        this.mirrorPairs.push([visual, a, b]);
+      }
+      this.cartIpad = cartIpad;
+      this.monitorMirror = mirror;
+      mirror.visible = false;
+      this.world.scene.add(mirror);
+      this.cartIpadEntity = this.world.createTransformEntity(cartIpad);
+      this.cartIpadEntity.addComponent(RayInteractable);
+      (cartIpad as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
+      (cartIpad as unknown as { addEventListener: (type: string, fn: () => void) => void }).addEventListener('pointerdown', () => {
+        if (this.immersive) this.holdIpad(true);
+      });
+    }
+    const cart = this.cartObject;
+    cart.visible = true;
+    cart.position.set(center.x, topY - CART_TOP.y / 2, center.z);
+    cart.rotation.set(0, Math.atan2(-toSet.x, -toSet.z), 0);
+    for (const leg of cart.children) {
+      if (leg.name !== 'cart-leg') continue;
+      const h = topY - CART_TOP.y;
+      leg.scale.y = h;
+      leg.position.y = -CART_TOP.y / 2 - h / 2;
+    }
+    // The phone lies near your end of the cart, propped toward you.
+    this.cartPhonePos.copy(center).addScaledVector(toSet, -0.05).addScaledVector(side, 0.07);
+    this.cartPhonePos.y = topY + 0.03;
+    facer.position.copy(this.cartPhonePos);
+    facer.lookAt(head);
+    this.cartPhoneQuat.copy(facer.quaternion);
+    // The iPad leans on its easel at the back of the cart.
+    const ipad = this.cartIpad!;
+    ipad.scale.setScalar(CART_IPAD_SCALE);
+    this.cartIpadPos.copy(center).addScaledVector(toSet, 0.04).addScaledVector(side, -0.04);
+    this.cartIpadPos.y = topY + (IPAD_HEIGHT * CART_IPAD_SCALE) / 2 - 0.004;
+    facer.position.copy(this.cartIpadPos);
+    facer.lookAt(head);
+    this.cartIpadQuat.copy(facer.quaternion);
+    ipad.position.copy(this.cartIpadPos);
+    ipad.quaternion.copy(this.cartIpadQuat);
   }
 
   /** A C-stand for the monitor: three legs on the floor, a pole up to the monitor's bottom edge. */

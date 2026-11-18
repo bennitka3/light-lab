@@ -377,19 +377,20 @@ const { chromium } = require('playwright');
   check('the silk stays above everyone\'s heads', silkY >= 0.17, { silkY });
 
   // Round 11 (ben, 2026-11-03).
-  // Dee's notes for a scene are short and all fit on the phone at once; nothing but the win and gossip after a win.
+  // Dee's note for a scene is one short text (2026-11-17: only the first line is sent) and fits on the phone; nothing but the win and gossip after a win.
   for (const id of await api(() => window.lightLab.levelIds())) {
     await api(() => window.lightLab.clearPhone());
     await api((x) => window.lightLab.loadLevelId(x), id);
     const lines = await api(() => window.lightLab.levelDee());
     const sent = await api(() => window.lightLab.texts().length);
-    for (const line of lines) await api((t) => window.lightLab.dee(t), line);
+    const note = lines.slice(0, 1);
+    for (const line of note) await api((t) => window.lightLab.dee(t), line);
     await page
-      .waitForFunction(([n, last]) => window.lightLab.texts().slice(n).includes(`dee: ${last}`), [sent, lines[lines.length - 1]], { timeout: 120000 })
+      .waitForFunction(([n, last]) => window.lightLab.texts().slice(n).includes(`dee: ${last}`), [sent, note[note.length - 1]], { timeout: 120000 })
       .catch(() => {});
     await wait(1500);
     const shown = await api(() => window.lightLab.phoneVisible());
-    check(`scene ${id}: all of Dee's notes fit on the phone together`, lines.every((l) => shown.includes(l)), { lines, shown });
+    check(`scene ${id}: Dee's note fits on the phone`, note.every((l) => shown.includes(l)), { note, shown });
     check(`scene ${id}: Dee's notes don't give button instructions`, !lines.some((l) => /\b(tap|iPad|button|click|drag)\b/i.test(l)), lines);
   }
   await page.screenshot({ path: `${out}/16-dee-notes.png` });
