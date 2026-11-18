@@ -41,7 +41,8 @@ const fs = require('fs');
   await page.waitForTimeout(3000);
   await snap('title');
   const card = await page.evaluate(() => window.lightLab.card());
-  check(card.steps.length === 2 && !card.steps.some((s) => /Shift-drag|Drag empty/.test(s)), 'title page no longer lists the controls');
+  // ben, 2026-11-18 morning: no steps on the opening card; the first lesson walks you through it.
+  check(!card.steps || card.steps.length === 0, 'title page lists no steps');
   const go = await at('card-button');
   await page.mouse.click(go.x, go.y);
 

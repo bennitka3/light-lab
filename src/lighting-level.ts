@@ -1129,6 +1129,8 @@ export class LightingLevelSystem extends createSystem({
             phone: { at: this.phone.mesh.getWorldPosition(new Vector3()).toArray(), visible: this.phone.mesh.visible },
             sign: this.sign ? this.sign.group.position.toArray() : null,
             strip: this.strip ? this.strip.mesh.getWorldPosition(new Vector3()).toArray() : null,
+            stripShown: this.strip?.mesh.visible ?? false,
+            coachSkill: this.coachStep?.skill ?? null,
             panel: this.panel?.group.visible && this.panelFixture ? { light: KIND_LABELS[this.panelFixture.item.kind], at: this.panel.group.getWorldPosition(new Vector3()).toArray(), linger: this.panelLinger } : null,
             phase: this.phase,
             hintRing: this.hintHalo ? KIND_LABELS[this.hintHalo.fixture.item.kind] : null,
@@ -1759,19 +1761,10 @@ export class LightingLevelSystem extends createSystem({
         ? `Light Lab · Beta track${this.levelIndex > 0 ? ` · Starting at scene ${this.levelIndex + 1}` : ''}`
         : this.levelIndex > 0
         ? `Light Lab · Starting at scene ${this.levelIndex + 1}`
-        : 'Light Lab · How to play',
+        : 'Light Lab',
       title: 'Six months as Background Extra #47.',
       body: 'Today is your last day on set. Then the lighting guy walks off the job, and the director points straight at you.',
-      // No list of controls up front (ben, 2026-11-16: it "means nothing without seeing the
-      // actual controls"). The coach rings each one, on the iPad or on set, when it's needed.
-      steps: [
-        headset
-          ? 'Make the set look like the TARGET on the sign, then hands off till Cut.'
-          : 'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
-        headset
-          ? "Point at a light for its controls. Yellow shows what's next."
-          : 'Each control lights up in yellow, here or on set, the first time you need it.',
-      ],
+      // No steps: the first lesson walks you through it (ben, 2026-11-18 morning).
       footer: IS_RESULT && !this.xrStatus
         ? 'RESULT BETA: one scene, judged only by how your shot looks. Any lights, anywhere. No bar.'
         : IS_BETA && !this.xrStatus
@@ -2802,7 +2795,7 @@ export class LightingLevelSystem extends createSystem({
       return {
         score,
         hint: this.dockReady
-          ? 'First, cut the house lights so you can see what your lights do. Pinch HOUSE on the wall toward the director.'
+          ? 'First, cut the house lights so you can see what your lights do. Pinch HOUSE.'
           : 'First, cut the house lights so you can see what your lights do. Click HOUSE on the iPad.',
       };
     }
@@ -2856,7 +2849,9 @@ export class LightingLevelSystem extends createSystem({
       if (off && on.length > 0) {
         return {
           score,
-          hint: `The ${role.label.toLowerCase()} is off. Switch on the ${KIND_NAMES[off.item.kind]}${this.dockReady ? ' (pinch the switch over it)' : ' on the iPad'}.`,
+          hint: this.dockReady
+            ? `The ${role.label.toLowerCase()} is off. Pinch the switch to turn on the ${KIND_NAMES[off.item.kind]}.`
+            : `The ${role.label.toLowerCase()} is off. Switch on the ${KIND_NAMES[off.item.kind]} on the iPad.`,
           fixture: off,
         };
       }
@@ -2898,7 +2893,7 @@ export class LightingLevelSystem extends createSystem({
         hint:
           level.houseHint === 'ambient'
             ? this.dockReady && this.ambientWait > AMBIENT_RESCUE_SECONDS
-              ? "Looks right, but there's too much ambient light. Cut the house lights: pinch HOUSE on the wall toward the director."
+              ? "Looks right, but there's too much ambient light. Cut the house lights: pinch HOUSE."
               : "Looks right, but there's too much ambient light."
             : 'Looks right. Cut the house lights when you want to roll.',
       };
@@ -3056,7 +3051,8 @@ export class LightingLevelSystem extends createSystem({
     const fit = this.roleFit(role, here);
     if (fit > 0.95) {
       this.tipMove.axis = -1;
-      return 'Almost there. Hold it...';
+      // In place: no tip at all (ben, 2026-11-18: "you're not almost there, you're there").
+      return '';
     }
     const target = this.roleLocal(role, this.v2);
     // A light that belongs behind the cast but sits in front goes round, not through.
@@ -3103,7 +3099,8 @@ export class LightingLevelSystem extends createSystem({
     }
     if (bestAxis < 0) {
       this.tipMove.axis = -1;
-      return 'Almost there. Hold it...';
+      // In place: no tip at all (ben, 2026-11-18: "you're not almost there, you're there").
+      return '';
     }
     // Say when the player has finished one direction and the tip moves to another.
     if (kept && kept.axis !== bestAxis) {
@@ -3561,12 +3558,12 @@ export class LightingLevelSystem extends createSystem({
     switch (skill) {
       case 'shots':
         text = this.dockReady
-          ? "The sign shows the director's TARGET. Make the live set look like it. Pinch Got it."
+          ? "This is the director's TARGET. Make the live set look like it, then pinch Got it."
           : "Left: the director's TARGET. Right: YOUR SHOT, live. Make them match. Click Got it.";
         break;
       case 'house':
         text = this.dockReady
-          ? 'Pinch the HOUSE switch on the wall of the set, toward the director, to switch off the house lights.'
+          ? 'Pinch HOUSE to switch off the house lights.'
           : `${press} HOUSE${trigger} to switch off the house lights.`;
         break;
       case 'look':
@@ -3576,7 +3573,7 @@ export class LightingLevelSystem extends createSystem({
         const fixture = this.coachSwitchFixture()!;
         this.coachFixture = fixture;
         text = this.dockReady
-          ? `Pinch the switch floating over the ${KIND_LABELS[fixture.item.kind]} to turn it on.`
+          ? `Pinch the switch to turn on the ${KIND_LABELS[fixture.item.kind]}.`
           : `${press} ${KIND_LABELS[fixture.item.kind]}${trigger} to switch that light on.`;
         break;
       }
@@ -3596,12 +3593,12 @@ export class LightingLevelSystem extends createSystem({
         // The blind track never says which way: matching by eye is the game there.
         if (IS_BETA) {
           text = this.dockReady
-            ? `Pinch - or + over the ${name} to dim it or brighten it.`
+            ? `Pinch - or + to dim or brighten the ${name}.`
             : `${press} ◀ or ▶ on the ${name}${trigger} to dim it or brighten it.`;
           break;
         }
         text = this.dockReady
-          ? `Pinch ${brighter ? '+' : '-'} over the ${name} to make it ${brighter ? 'brighter' : 'dimmer'}.`
+          ? `Pinch ${brighter ? '+' : '-'} to make the ${name} ${brighter ? 'brighter' : 'dimmer'}.`
           : `${press} ${brighter ? '▶' : '◀'} on the ${name}${trigger} to make it ${brighter ? 'brighter' : 'dimmer'}.`;
         break;
       }
@@ -3938,12 +3935,13 @@ export class LightingLevelSystem extends createSystem({
     const ipad = this.ipad.object;
     const phone = this.phone.mesh;
     if (full) {
-      const scale = HUD_IPAD_FULL_XR_SCALE * 0.8;
+      // Back in the set and smaller (ben, 2026-11-18 morning: right up in your face before).
+      const scale = HUD_IPAD_FULL_XR_SCALE * 0.55;
       ipad.visible = true;
       ipad.scale.setScalar(scale);
       // At eye level in the set's open front, facing you (playthrough: up at the sign you had
       // to tilt your head about 40° to read the story and the credits).
-      this.stage.localToWorld(ipad.position.set(0, VIEW_AT.y - 0.01, STAGE_DEPTH / 2 + 0.02));
+      this.stage.localToWorld(ipad.position.set(0, VIEW_AT.y + 0.015, -0.04));
       ipad.lookAt(this.headWorld);
     } else {
       // In play there's no iPad: the sign and the strip show what it did.
@@ -3959,12 +3957,12 @@ export class LightingLevelSystem extends createSystem({
     const titleStrip = full && this.phase === 'title';
     if (titleStrip) {
       // The brightness - / + under the title page, at eye level.
-      strip.set({ score: -1, won: false, text: 'Too dark? Too bright? Pinch - or +.', coaching: false, house: null, bright: this.vrBrightness });
+      strip.set({ score: -1, won: false, text: 'Too dark or bright?', coaching: false, house: null, bright: this.vrBrightness });
       ipad.updateMatrixWorld();
-      const k = 0.9;
+      const k = 0.8;
       ipad.localToWorld(strip.mesh.position.set(0, -IPAD_HEIGHT / 2 - 0.006 - (CARD_H * k) / 2, 0.002));
       ipad.getWorldQuaternion(strip.mesh.quaternion);
-      strip.mesh.scale.setScalar(HUD_IPAD_FULL_XR_SCALE * 0.8 * k);
+      strip.mesh.scale.setScalar(HUD_IPAD_FULL_XR_SCALE * 0.55 * k);
       strip.mesh.visible = true;
       (strip.mesh as unknown as { pointerEvents: string }).pointerEvents = 'auto';
       this.cardShown = false;
