@@ -23,7 +23,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      # onnxruntime-node (a dev tool dependency) tries to download CUDA binaries that now 404;
+      # the game never uses them, so skip that download (the CPU build still installs).
+      - run: npm ci --onnxruntime-node-install-cuda=skip
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
