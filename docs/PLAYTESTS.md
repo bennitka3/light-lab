@@ -3,6 +3,26 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (4 AM): judge playthrough before submission (headset emulator, hands only)
+
+All ten scenes and the credits were played in the IWSDK headset emulator with hand pinches only, doing
+what the card and arrows said, on the live build (PR #39). Every scene can be won hands-only. Last
+night's ten notes were each checked there. What the playthrough found:
+
+| Found | Status |
+| --- | --- |
+| Scenes 6 and 9 have two lights of the same kind, one with a color dial. Switch on the dial one first and the tip said "The key light is off. Switch on the softbox" and ringed the plain one, which can never go warm. | **Fixed.** That tip only ever names a light that can do the job. If the right light is on but still daylight, the tip is "Right light, wrong color: dial the softbox down to 3200K (warm)." and it rings that light. |
+| "Too many lights: switch off the softbox" with two softboxes on didn't say which. | **Fixed.** It rings the one to switch off. |
+| Scene 9 (sunset): "Move it round the back" didn't say which side. Round the wrong side, the low sun can't get to its mark without crossing the shot, so the arrows pointed at the back wall and the match sat at 0%. | **Fixed (wording):** "The sun belongs behind the cast, on the director's side. Move it round the back." Not changed: if you go round the wrong side anyway, you still have to carry it across the shot yourself. |
+| Scene 8 (car): the match stops at 48% on "Looks right, but there's too much ambient light." Dee's rescue text goes to the phone, which lies on the craft table in the headset, so nobody sees it. | **Fixed (headset):** after 12 s on that tip it adds "Cut the house lights: pinch HOUSE on the wall toward the director." The browser is unchanged. |
+| Scene 5 (desert): the parked silk hangs between your eyes and the set, so the scene opens behind a white sheet. | **Fixed (headset):** the fabric is see-through while parked, solid once it's over the set. |
+| Scene 3 opened on "Height looks good. Move the key light..." with the light still on the floor: the last scene's tip direction carried over. | **Fixed.** Tip state resets with each scene. |
+| Scene 1: the director said "set how bright each light is, then kill the house lights", the coach asks for the house lights first. | **Fixed.** "Kill the house lights, then set how bright each light is, and we'll roll." |
+| Scenes 3 and 8: "The back light is way too bright. Dim the Fresnel" while that light is still parked and the match reads 0%. | **Left.** It is last night's "a way-off dimmer first" fix working as written; changing the order again hours before submission isn't worth the risk. |
+| Tips keep fine-tuning one light to 95% before moving to the next, though a scene wins at 85%. | **Left.** A balance change; needs ben's feel check. |
+| The director's bubble is cut off at the left edge of the view until you turn your head. Title says "Lucky Break", Devpost says "Light Lab". | **Left for ben.** |
+| Test bots: `beta-track.cjs` times out waiting for the take after the tutorial; `playtest-fixes.cjs` fails its phone-tuck and house-lights-at-start checks. | **Left.** All three fail the same way on `main` before this change (the bots are behind the last few nights' changes). Backlog: bring them up to date after the deadline. |
+
 ## 2026-11-18 (2 AM): last notes before the recording (ben, Quest 1 playthrough)
 
 Stills from ben's 17-minute recording: project files `meta-vr/playtest-r8/`.
