@@ -551,6 +551,7 @@ export class LightingLevelSystem extends createSystem({
   private arrowTime = 0;
   /** Texts on the phone when last placed, and how much buzz is left (seconds). */
   private phoneSeen = 0;
+  private craftTableRef?: Object3D;
   private phoneBuzz = 0;
   /** The light a brightness tip is about and which way (its panel shows, the button outlined). */
   private dimCue?: Fixture;
@@ -3432,7 +3433,8 @@ export class LightingLevelSystem extends createSystem({
         return this.coachDimmerFixture() !== undefined;
       case 'phone':
         // In the headset the phone is an easter egg on the craft table (ben, 2026-11-18): no lesson.
-        return !this.dockReady && this.phone.mesh.visible && this.phone.awake && !this.phone.pinned;
+        // The phone is an easter egg on the craft table now (ben, 2026-11-18): no lesson.
+        return false;
     }
   }
 
@@ -3750,12 +3752,21 @@ export class LightingLevelSystem extends createSystem({
         Math.max((halfH * 0.6) / PHONE_HEIGHT, Math.min((halfH * 0.9) / PHONE_HEIGHT, (halfW - ipadW / 2 - 2 * margin) / PHONE_WIDTH)) *
         MathUtils.clamp(this.ipadZoom, 0.85, 1.3);
       const phoneH = PHONE_HEIGHT * phoneScale;
-      phone.scale.setScalar(phoneScale);
-      const phoneX = Math.min(ipadW / 2 + margin + (PHONE_WIDTH * phoneScale) / 2, halfW - margin - (PHONE_WIDTH * phoneScale) / 2);
-      const phoneY = -halfH + margin + phoneH / 2 - this.phoneTuck * phoneH * 0.8 + bounce;
-      this.hudTarget.set(phoneX, phoneY, -d + 0.001);
-      phone.position.copy(camera.localToWorld(this.hudTarget));
-      phone.quaternion.copy(ipad.quaternion);
+      if (this.phone.pinned) {
+        // Picked up off the craft table: up on screen beside the iPad until clicked again.
+        phone.renderOrder = 1003;
+        (phone.material as MeshBasicMaterial).depthTest = false;
+        phone.scale.setScalar(phoneScale);
+        const phoneX = Math.min(ipadW / 2 + margin + (PHONE_WIDTH * phoneScale) / 2, halfW - margin - (PHONE_WIDTH * phoneScale) / 2);
+        const phoneY = -halfH + margin + phoneH / 2 + bounce;
+        this.hudTarget.set(phoneX, phoneY, -d + 0.001);
+        phone.position.copy(camera.localToWorld(this.hudTarget));
+        phone.quaternion.copy(ipad.quaternion);
+      } else {
+        // ben, 2026-11-18: it covered the iPad, even tucked. It waits on the craft table.
+        this.phoneOnTable(1, delta);
+      }
+      this.phoneSeen = this.phone.log.length;
     } else {
       const zoom = this.ipadZoom;
       this.immersiveFrames++;
@@ -3865,20 +3876,43 @@ export class LightingLevelSystem extends createSystem({
       phone.position.lerp(this.hudTarget, follow);
       phone.lookAt(this.headWorld);
     } else {
-      // Lying on the stage's front corner; a new text lights it up there. It's a thing in the
-      // room, so it hides behind real things.
-      phone.scale.setScalar(PHONE_SPOT_SCALE);
-      phone.position.lerp(this.phoneSpotPos, follow);
-      phone.quaternion.slerp(this.phoneSpotQuat, follow);
-      if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
-      // A new text buzzes it on the table: a few little hops, for anyone observant.
-      if (this.phone.log.length > this.phoneSeen) this.phoneBuzz = 1.2;
-      if (this.phoneBuzz > 0) {
-        this.phoneBuzz -= delta;
-        phone.position.y = this.phoneSpotPos.y + Math.abs(Math.sin(this.phoneBuzz * 40)) * 0.0012 * Math.min(1, this.phoneBuzz);
-      }
+      this.phoneOnTable(follow, delta);
     }
     this.phoneSeen = this.phone.log.length;
+  }
+
+  /**
+   * The phone lying on the craft services table, an easter egg (ben, 2026-11-18): it lights up and
+   * hops when Dee texts, and a click or pinch picks it up. It's a thing in the room, so it hides
+   * behind real things. Browser and headset alike.
+   */
+  private phoneOnTable(follow: number, delta: number): void {
+    const phone = this.phone.mesh;
+    const table = this.craftTable;
+    if (table) {
+      // In the table's own (real-meter) frame: front edge, between the coffee urn and the donuts.
+      table.updateMatrixWorld();
+      table.localToWorld(this.phoneSpotPos.set(-0.2, 0.7605, 0.19));
+      table.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -Math.PI / 2 + 0.05));
+    }
+    phone.renderOrder = 990;
+    (phone.material as MeshBasicMaterial).depthTest = true;
+    phone.scale.setScalar(PHONE_SPOT_SCALE);
+    phone.position.lerp(this.phoneSpotPos, follow);
+    phone.quaternion.slerp(this.phoneSpotQuat, follow);
+    if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
+    // A new text buzzes it on the table: a few little hops, for anyone observant.
+    if (this.phone.log.length > this.phoneSeen) this.phoneBuzz = 1.2;
+    if (this.phoneBuzz > 0) {
+      this.phoneBuzz -= delta;
+      phone.position.y = this.phoneSpotPos.y + Math.abs(Math.sin(this.phoneBuzz * 40)) * 0.0012 * Math.min(1, this.phoneBuzz);
+    }
+  }
+
+  /** The craft services table, found once per scene load (crew are re-placed per scene). */
+  private get craftTable(): Object3D | undefined {
+    if (!this.craftTableRef || !this.craftTableRef.parent) this.craftTableRef = this.world.scene.getObjectByName('craft-table');
+    return this.craftTableRef;
   }
 
   /**
@@ -4069,16 +4103,6 @@ export class LightingLevelSystem extends createSystem({
     this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
     stage.localToWorld(this.phoneSpotPos.copy(this.v1));
     stage.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -lean));
-    // The phone is an easter egg (ben, 2026-11-18): lying flat on the craft services table.
-    const table = this.world.scene.getObjectByName('craft-table');
-    if (table) {
-      // In the table's own (real-meter) frame: front edge, between the coffee urn and the donuts.
-      table.updateMatrixWorld(true);
-      table.localToWorld(this.v1.set(-0.2, 0.7605, 0.19));
-      this.phoneSpotPos.copy(this.v1);
-      table.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -Math.PI / 2 + 0.05));
-      devLog(`phone on the craft table at ${this.v1.toArray().map((n) => n.toFixed(3))}`);
-    }
     devLog(
       `on set: sign bottom ${bottom.toFixed(2)} m over the set floor (sightline ${sightY.toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°`,
     );
@@ -4434,7 +4458,12 @@ export class LightingLevelSystem extends createSystem({
       press = () => this.pressIpad(control);
     } else {
       const phoneHit = this.raycaster.intersectObject(this.phone.mesh, false)[0];
-      if (phoneHit) {
+      // On the table it's small: a click near it picks it up.
+      const nearPhone = !this.phone.pinned && this.phone.mesh.visible && this.raycaster.ray.distanceToPoint(this.phone.mesh.position) < 0.012;
+      if (nearPhone) {
+        fixtureHit = null;
+        press = () => this.phone.togglePin();
+      } else if (phoneHit) {
         fixtureHit = null;
         const local = this.phone.mesh.worldToLocal(phoneHit.point.clone());
         press = () => this.phone.pressAt(local.x, local.y);

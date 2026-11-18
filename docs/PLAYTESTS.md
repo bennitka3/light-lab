@@ -3,6 +3,12 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (after midnight): the phone waits on the craft table in the browser too (ben)
+
+| ben's note | Status |
+| --- | --- |
+| "this happens when you start on browser... dee's phone shouldn't come up until you get situated anyway, and even when tucked it covers your controls. can we just cut it unless you click it on the craft services table" | **Done.** In the browser the phone lies on the craft services table like in the headset (lights up and hops on a text). Click it to bring it up beside the iPad, click again to put it back. No phone lesson anywhere now. |
+
 ## 2026-11-18 (late night): auto next scene, click-through tutorial, four mockups (ben)
 
 | ben's note | Status |
