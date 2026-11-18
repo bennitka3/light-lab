@@ -555,6 +555,7 @@ export class LightingLevelSystem extends createSystem({
   /** Texts on the phone when last placed, and how much buzz is left (seconds). */
   private phoneSeen = 0;
   private craftTableRef?: Object3D;
+  private stepTarget = new Vector3();
   /** Headset: the HOUSE switch plate on the set's wall, and its rocker. */
   private houseSwitchPlate?: Mesh;
   private houseSwitchRocker?: Object3D;
@@ -1737,7 +1738,7 @@ export class LightingLevelSystem extends createSystem({
       // actual controls"). The coach rings each one, on the iPad or on set, when it's needed.
       steps: [
         headset
-          ? 'Make the set look like the TARGET on this sign, then hands off till Cut.'
+          ? 'Make the set look like the TARGET on the sign, then hands off till Cut.'
           : 'Make YOUR SHOT on this iPad match the TARGET, then hands off till Cut.',
         headset
           ? "Point at a light for its controls. Yellow shows what's next."
@@ -1748,12 +1749,12 @@ export class LightingLevelSystem extends createSystem({
         : IS_BETA && !this.xrStatus
         ? 'BETA TRACK: every scene, new shots, no match bar. Match it by eye. The main game is unchanged.'
         : headset
-        ? 'Seven scenes. One soundstage. Zero qualifications.'
+        ? `${LEVELS.length === 10 ? 'Ten' : LEVELS.length} scenes. One soundstage. Zero qualifications.`
         : this.xrStatus
         ? this.xrStatus
         : this.canEnterXR
         ? 'In the headset browser? If it asks to allow immersive mode, press Allow first.'
-        : 'Seven scenes. Zero qualifications. On a Quest? Open this page there to play in VR.',
+        : `${LEVELS.length === 10 ? 'Ten' : LEVELS.length} scenes. Zero qualifications. On a Quest? Open this page there to play in VR.`,
       button2: this.canEnterXR && !headset ? 'Play in VR' : undefined,
       button: 'Go',
     });
@@ -2826,9 +2827,11 @@ export class LightingLevelSystem extends createSystem({
     }
     // Dimmers (beta track): once the lights are in place, say which one is too bright or too dark.
     const placed = assigned.reduce((a, b) => (b.place < a.place ? b : a));
-    if (placed.place > 0.85 || level.locked) {
+    {
+      // A dimmer that's way off comes first even before the lights are placed: the playthrough
+      // circled a top light at 24% while the real miss was the LED panel at 100% (scene 8).
       const dim = this.dimmerHint(assigned);
-      if (dim) return { score, hint: dim.hint, fixture: dim.fixture };
+      if (dim && (placed.place > 0.85 || level.locked || / way too /.test(dim.hint))) return { score, hint: dim.hint, fixture: dim.fixture };
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
     if (this.houseOn && worst.fit > 0.85) {
@@ -3099,6 +3102,11 @@ export class LightingLevelSystem extends createSystem({
     const p = this.v6.copy(here);
     p.setComponent(axis, p.getComponent(axis) + sign * step);
     if (p.y < 0.01 || this.inFrameAt(p, kind)) {
+      return -1;
+    }
+    // A light whose mark hangs from the grid never gets sent down off it: below the hang line
+    // it lands on a floor stand in the shot, and the tips looped (playthrough, scene 4).
+    if (axis === 1 && sign < 0 && this.hangs(here.y) && !this.hangs(p.y) && this.hangs(this.roleLocal(role, this.stepTarget).y)) {
       return -1;
     }
     // Compare on the log scale: near the spot it is the same as comparing fits, and far
@@ -3851,14 +3859,13 @@ export class LightingLevelSystem extends createSystem({
     const ipad = this.ipad.object;
     const phone = this.phone.mesh;
     if (full) {
-      // A full page (title, credits) stands where the sign is, its bottom on the sign's.
       const scale = HUD_IPAD_FULL_XR_SCALE * 0.8;
       ipad.visible = true;
       ipad.scale.setScalar(scale);
-      ipad.quaternion.copy(this.signQuat);
-      const sign = this.sign!;
-      this.v1.set(0, (IPAD_HEIGHT * scale - sign.height) / 2, 0.01).applyQuaternion(this.signQuat);
-      ipad.position.copy(this.signPos).add(this.v1);
+      // At eye level in the set's open front, facing you (playthrough: up at the sign you had
+      // to tilt your head about 40° to read the story and the credits).
+      this.stage.localToWorld(ipad.position.set(0, VIEW_AT.y - 0.01, STAGE_DEPTH / 2 + 0.02));
+      ipad.lookAt(this.headWorld);
     } else {
       // In play there's no iPad: the sign and the strip show what it did.
       ipad.visible = false;
@@ -3891,7 +3898,8 @@ export class LightingLevelSystem extends createSystem({
       strip.set({
         score: iPad.blind ? -1 : iPad.scoreValue,
         won,
-        text: coach || (shown ? '' : iPad.hintText),
+        // Once won it's hands off till Cut: no tip (playthrough: "Move the key light" during the take).
+        text: this.phase !== 'playing' ? '' : coach || (shown ? '' : iPad.hintText),
         coaching: Boolean(coach),
         // HOUSE is a switch on the set's wall in the headset (ben: too hard to pinch up there).
         house: null,

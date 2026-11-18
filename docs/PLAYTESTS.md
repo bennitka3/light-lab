@@ -3,6 +3,16 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (1 AM): fixes from the blind bot playthrough
+
+From `meta-vr/playthrough/REPORT.md` (project files), run on the build before PR #37:
+- Scene 4 tip loop ("Lower" dropped the top light off the grid onto a stand in the shot): a light whose mark hangs is never tipped below the hang line. **Fixed.**
+- Tips during the take after a win: the sign's tip line is blank once won. **Fixed.**
+- Scene 8 tips circled the top light while the LED panel dimmer was way off: a dimmer that's way off is now the first tip. **Fixed.**
+- "Seven scenes" on the title: now "Ten scenes". **Fixed.**
+- Title and credits ~40° overhead: they now stand at eye level in the set's open front. **Fixed.**
+- Not done (time): phone floating over a light in the finale; the desert silk parked in your face; "Move it round the back" wording.
+
 ## 2026-11-18 (1 AM): before recording (ben)
 
 | ben's note | Status |
