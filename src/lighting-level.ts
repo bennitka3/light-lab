@@ -189,8 +189,8 @@ const START_SPOT = { x: 0, z: 0.55 };
 /** The sign's bottom edge sits this far above your sightline to the back of the set floor. */
 const SIGN_CLEAR = 0.025;
 /** The HOUSE wall switch in the headset: a plate on the set's front edge, toward the director. */
-const HOUSE_PLATE_W = 0.04;
-const HOUSE_PLATE_H = 0.056;
+const HOUSE_PLATE_W = 0.032;
+const HOUSE_PLATE_H = 0.045;
 /** The sign's size on the back wall (ben, 2026-11-18: 0.75 and 0.9 a little too small). */
 const SIGN_SCALE = 1;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
