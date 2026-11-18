@@ -199,7 +199,7 @@ const SIGN_CORNER_SCALE = 0.45;
 /** The phone lies on the apron's front corner on the craft-services side, clear of the crew (stage meters). */
 const PHONE_SPOT = new Vector3(0.36, 0.004, 0.385);
 /** The phone lying on the craft services table: a real phone's size next to the crew (1/14 scale). */
-const PHONE_SPOT_SCALE = 0.07;
+const PHONE_SPOT_SCALE = 0.11;
 /** A light's panel stays this long after the pointer leaves the light (seconds). */
 const PANEL_LINGER = 1.2;
 const PANEL_SCALE = 1.4;
@@ -594,6 +594,13 @@ export class LightingLevelSystem extends createSystem({
   private stripOnSign = new Vector3();
   /** The tip card was up last frame (so it glides instead of jumping when its subject changes). */
   private cardShown = false;
+  /** Times the phone has pinged this session (at most two), and a hop is due on the table. */
+  private phonePings = 0;
+  private phoneHop = false;
+  /** The move arrow's dark outline material. */
+  private arrowInk?: MeshBasicMaterial;
+  /** The light the player last switched, dimmed, dialed or moved: the tips stay on it until it's done (ben). */
+  private touchedFixture?: Fixture;
   /** The light being moved last frame, and where it was (for the slide sound). */
   private slideFixture?: Fixture;
   private slidePrev = new Vector3();
@@ -1240,6 +1247,7 @@ export class LightingLevelSystem extends createSystem({
     this.inFrameTime = 0;
     this.hintSince = 0;
     this.lastHint = '';
+    this.touchedFixture = undefined;
     // The last scene's tip direction is done with: scene 3 opened on "Height looks good." for
     // a light still parked on the floor (judge playthrough, 2026-11-18).
     this.tipMove.role = '';
@@ -1333,7 +1341,7 @@ export class LightingLevelSystem extends createSystem({
         switch: this.createSwitch(this.v1, 0.04, () => {
           practical.on = !practical.on;
           this.resetHold();
-          this.touchedSet();
+          this.touchedSet('lamp');
         }),
       };
       this.practical = practical;
@@ -1876,7 +1884,7 @@ export class LightingLevelSystem extends createSystem({
    * match and "Cut!" that ruins the take (ben, 2026-11-16): the crew act it out and the scene
    * goes back to playing, so matching it again rolls again.
    */
-  private touchedSet(): void {
+  private touchedSet(what?: Fixture | 'lamp' | 'house lights'): void {
     if (this.phase !== 'won' || this.takeTime >= TAKE_SECONDS) return;
     const rolling = this.takeTime >= ACTION_AT;
     devLog(`take blown (${rolling ? 'while rolling' : 'before action'})`);
@@ -1895,7 +1903,9 @@ export class LightingLevelSystem extends createSystem({
     this.directorLooking = true;
     this.showPage({ eyebrow: this.sceneLabel(), body: '' });
     if (rolling) {
-      this.say('"CUT! CUT! Who touched that light?!"', true);
+      // Name what was touched: a silk or a bounce card isn't a light (ben, 2026-11-18, desert).
+      const thing = what === undefined ? 'that' : typeof what === 'string' ? `the ${what}` : SHAPERS.has(what.item.kind) ? `the ${KIND_NAMES[what.item.kind]}` : 'that light';
+      this.say(`"CUT! CUT! Who touched ${thing}?!"`, true);
       this.phone.text('dee', "😬 they SAW that. once they roll, don't touch anything till Cut");
     } else {
       this.say('"Whoa, hands off! I was about to call action."', true);
@@ -2150,9 +2160,10 @@ export class LightingLevelSystem extends createSystem({
     if (SHAPERS.has(fixture.item.kind)) return;
     devLog(`light ${fixture.item.kind} switched ${fixture.on ? 'off' : 'on'}`);
     fixture.on = !fixture.on;
+    this.touchedFixture = fixture;
     sfx.lightSwitch(fixture.on);
     this.resetHold();
-    this.touchedSet();
+    this.touchedSet(fixture);
   }
 
   private toggleHouse(): void {
@@ -2160,7 +2171,7 @@ export class LightingLevelSystem extends createSystem({
     if (!this.houseOn) this.houseEverOff = true;
     devLog(`house lights ${this.houseOn ? 'on' : 'off'}`);
     this.resetHold();
-    this.touchedSet();
+    this.touchedSet('house lights');
   }
 
   /** Turns a bi-color light's dial one stop warmer (-1) or cooler (+1). */
@@ -2169,8 +2180,9 @@ export class LightingLevelSystem extends createSystem({
     const i = KELVIN_STEPS.indexOf(fixture.kelvin);
     const next = KELVIN_STEPS[MathUtils.clamp((i < 0 ? KELVIN_STEPS.length - 1 : i) + step, 0, KELVIN_STEPS.length - 1)];
     if (next !== fixture.kelvin) sfx.dialTick(next > fixture.kelvin);
+    this.touchedFixture = fixture;
     this.setKelvin(fixture, next);
-    this.touchedSet();
+    this.touchedSet(fixture);
   }
 
   private setKelvin(fixture: Fixture, kelvin: number): void {
@@ -2188,11 +2200,12 @@ export class LightingLevelSystem extends createSystem({
   private turnDimmer(fixture: Fixture, step: 1 | -1): void {
     if (!fixture.item.dimmer) return;
     const was = fixture.dimmer;
+    this.touchedFixture = fixture;
     fixture.dimmer = MathUtils.clamp(Math.round((fixture.dimmer + step * DIMMER_STEP) * 10) / 10, DIMMER_STEP, 1);
     if (fixture.dimmer !== was) sfx.dimmerTick(fixture.dimmer > was);
     devLog(`light ${fixture.item.kind} dimmed to ${Math.round(fixture.dimmer * 100)}%`);
     this.resetHold();
-    this.touchedSet();
+    this.touchedSet(fixture);
   }
 
   /** Builds the iPad's light row for the scene: HOUSE, each light in the kit, then the lamp. */
@@ -2344,12 +2357,13 @@ export class LightingLevelSystem extends createSystem({
       fixture.grabTime += Math.max(delta, 1e-4);
       // A rigged light (LevelDef.locked) snaps back: it can be tapped and dimmed, not moved.
       if (grabbed && !this.level.locked) {
+        this.touchedFixture = fixture;
         fixture.object.getWorldPosition(this.v1);
         fixture.local.copy(this.stage.worldToLocal(this.v1));
         // Moving a light while they roll ruins the take (a quick tap is a switch flip, caught
         // there). Measured from where it stood at the match, with room for a steady hand that
         // is still holding it when the shot matches.
-        if (this.phase === 'won' && fixture.local.distanceTo(fixture.rollFrom) > ROLL_MOVE_SLACK) this.touchedSet();
+        if (this.phase === 'won' && fixture.local.distanceTo(fixture.rollFrom) > ROLL_MOVE_SLACK) this.touchedSet(fixture);
         return;
       }
     } else if (fixture.grabTime > 0) {
@@ -2807,6 +2821,21 @@ export class LightingLevelSystem extends createSystem({
     if (level.practical && !this.practical?.on) {
       return { score: Math.min(score, 60), hint: this.dockReady ? 'The lamp in the shot is off. Point at the lamp on set and pinch.' : 'The lamp in the shot is off. Tap Lamp on the iPad.' };
     }
+    // Stay on the light you just touched until it's done: first its spot, then its brightness
+    // (ben, 2026-11-18 morning: "you shouldn't switch to another light's controls when the one
+    // you just touched is still sitting in front of you").
+    const touched = this.touchedFixture;
+    const mine = touched?.on ? assigned.find((a) => a.fixture === touched) : undefined;
+    if (mine && touched) {
+      if (!level.locked && mine.place < 0.95) {
+        const move = this.placeHint(mine.role, touched);
+        if (move) return { score, hint: move, fixture: touched };
+      }
+      if (level.locked || mine.place > 0.85) {
+        const dim = this.dimmerHint([mine]);
+        if (dim) return { score, hint: dim.hint, fixture: dim.fixture };
+      }
+    }
     const missing = assigned.filter((a) => !a.fixture);
     if (missing.length > 0) {
       const role = missing[0].role;
@@ -2834,6 +2863,11 @@ export class LightingLevelSystem extends createSystem({
       // The light for this job is already on, just dialed to the wrong color (it can still be
       // parked): name it, so the player isn't left guessing which of two softboxes has the dial.
       const undialed = extras.find((f) => f.item.dial && role.kinds.includes(f.item.kind) && (role.aim ?? 'cast') === (f.item.aim ?? 'cast'));
+      if (undialed && !level.locked && this.roleFit(role, undialed.local) < 0.85) {
+        // Move it to its spot first, then the color (ben: always move first).
+        const move = this.placeHint(role, undialed);
+        if (move) return { score, hint: move, fixture: undialed };
+      }
       if (undialed) {
         return {
           score,
@@ -2851,7 +2885,13 @@ export class LightingLevelSystem extends createSystem({
             (f) => !f.on && role.kinds.includes(f.item.kind) && (role.aim ?? 'cast') === (f.item.aim ?? 'cast') && (!role.warm || f.item.dial),
           )
         : undefined;
-      if (off && on.length > 0) {
+      if (off && !level.locked && this.roleFit(role, off.local) < 0.85) {
+        // Still parked: move it to its spot first, then switch it on (ben: never "turn on"
+        // a light that's still sitting off its mark).
+        const move = this.placeHint(role, off);
+        if (move) return { score, hint: move, fixture: off };
+      }
+      if (off && (on.length > 0 || this.dockReady)) {
         return {
           score,
           hint: this.dockReady
@@ -2888,7 +2928,8 @@ export class LightingLevelSystem extends createSystem({
     {
       // A dimmer that's way off comes first even before the lights are placed: the playthrough
       // circled a top light at 24% while the real miss was the LED panel at 100% (scene 8).
-      const dim = this.dimmerHint(assigned);
+      // Only lights already on their spot (ben: always move first, then brightness).
+      const dim = this.dimmerHint(level.locked ? assigned : assigned.filter((a) => a.place > 0.85));
       if (dim && (placed.place > 0.85 || level.locked || / way too /.test(dim.hint))) return { score, hint: dim.hint, fixture: dim.fixture };
     }
     const worst = assigned.reduce((a, b) => (b.fit < a.fit ? b : a));
@@ -3253,7 +3294,18 @@ export class LightingLevelSystem extends createSystem({
         m.renderOrder = 995;
         (m as unknown as { pointerEvents: string }).pointerEvents = 'none';
       }
-      arrow.add(shaft, tip);
+      // A dark outline behind it, so it reads on sand and bright floors too (ben, desert).
+      const ink = new MeshBasicMaterial({ color: '#111114', transparent: true, opacity: 0.6, depthTest: false, depthWrite: false, toneMapped: false });
+      const shaftInk = new Mesh(new CylinderGeometry(0.0034, 0.0034, 0.0285, 10), ink);
+      shaftInk.position.y = 0.013;
+      const tipInk = new Mesh(new ConeGeometry(0.0078, 0.0145, 16), ink);
+      tipInk.position.y = 0.0322;
+      for (const m of [shaftInk, tipInk]) {
+        m.renderOrder = 994;
+        (m as unknown as { pointerEvents: string }).pointerEvents = 'none';
+      }
+      arrow.add(shaft, tip, shaftInk, tipInk);
+      this.arrowInk = ink;
       this.moveArrow = arrow;
     }
     const arrow = this.moveArrow;
@@ -3271,6 +3323,7 @@ export class LightingLevelSystem extends createSystem({
     // Up and down arrows are bolder and stand beside the light, not over it, where the light's
     // label and the grid's hanging pipes hid them (ben, 2026-11-18).
     mat.opacity = (vertical ? 0.9 : 0.6) * MathUtils.clamp((left - 0.012) / 0.06, 0, 1);
+    if (this.arrowInk) this.arrowInk.opacity = Math.min(1, mat.opacity * 1.1);
     arrow.visible = mat.opacity > 0.02;
     const bob = 0.004 * (0.5 + 0.5 * Math.sin(this.arrowTime * 4));
     if (vertical) {
@@ -3477,7 +3530,13 @@ export class LightingLevelSystem extends createSystem({
       onPhoneDown,
     );
     // A chime and a buzz when a text lands; the director's "wah-wah" voice with each line.
+    // The phone is a quiet easter egg (ben, 2026-11-18 morning): it pings at most twice in the
+    // whole game, once early and once mid-game, not with every text.
     this.phone.onArrive = () => {
+      const ok = this.phonePings === 0 || (this.phonePings === 1 && this.levelIndex >= 4);
+      if (!ok) return;
+      this.phonePings += 1;
+      this.phoneHop = true;
       sfx.textChime();
       sfx.buzz(this.world.renderer.xr.getSession());
     };
@@ -4074,7 +4133,10 @@ export class LightingLevelSystem extends createSystem({
     phone.quaternion.slerp(this.phoneSpotQuat, follow);
     if (!phone.visible && this.phone.log.length > 0) phone.visible = true;
     // A new text buzzes it on the table: a few little hops, for anyone observant.
-    if (this.phone.log.length > this.phoneSeen) this.phoneBuzz = 1.2;
+    if (this.phoneHop) {
+      this.phoneHop = false;
+      this.phoneBuzz = 1.2;
+    }
     if (this.phoneBuzz > 0) {
       this.phoneBuzz -= delta;
       phone.position.y = this.phoneSpotPos.y + Math.abs(Math.sin(this.phoneBuzz * 40)) * 0.0012 * Math.min(1, this.phoneBuzz);
@@ -4566,9 +4628,11 @@ export class LightingLevelSystem extends createSystem({
       arm.rotation.x = Math.PI / 2;
       arm.position.set(0, top, -0.004);
       stand.add(riser, knuckle, arm);
-      // 1.3x the first cut, so you can actually see it (ben, 2026-11-18).
-      const w = 0.039;
+      // Bigger again (ben, 2026-11-18 morning), growing downward: its top edge stays where the
+      // 0.039-wide one's was, so it sits no higher in the set.
+      const w = 0.05;
       const h = (w * 9) / 16;
+      const topEdge = top + (0.039 * 9) / 16 + 0.002;
       const mon = new Group();
       const frame = new Mesh(new BoxGeometry(w + 0.003, h + 0.003, 0.002), new MeshStandardMaterial({ color: '#111216', roughness: 0.6 }));
       const screen = new Mesh(new PlaneGeometry(w, h), this.ipad.liveMaterial);
@@ -4608,7 +4672,7 @@ export class LightingLevelSystem extends createSystem({
       mon.add(bar);
       this.monitorBar = { canvas: barCanvas, texture: barTexture, key: '' };
       // Faces back toward the operator and you, tipped up a little.
-      mon.position.set(0, top + h / 2 + 0.002, 0.001);
+      mon.position.set(0, topEdge - h / 2, 0.001);
       mon.rotation.x = -0.25;
       stand.add(mon);
       stand.position.set(0.03, 0, 0.024);
@@ -4862,6 +4926,7 @@ export class LightingLevelSystem extends createSystem({
     if (fixtureHit && event.button === 0) {
       // Drag in the horizontal plane at the light's height.
       this.dragged = fixtureHit;
+      this.touchedFixture = fixtureHit;
       this.resetDragPlane(fixtureHit);
       event.preventDefault();
       return;
@@ -4873,7 +4938,7 @@ export class LightingLevelSystem extends createSystem({
     if (this.downPointer.distanceTo(this.v3.set(event.clientX, event.clientY)) > TAP_MAX_PIXELS) {
       this.dragMoved = true;
       // Dragging a light while they roll ruins the take.
-      if (this.dragged && !this.level.locked) this.touchedSet();
+      if (this.dragged && !this.level.locked) this.touchedSet(this.dragged);
     }
     if (this.dragged && this.level.locked) {
       // Rigged lights don't move; a click still flips the switch.
