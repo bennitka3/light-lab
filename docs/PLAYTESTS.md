@@ -3,6 +3,19 @@
 ben's playtest notes and what was done with each. Newest first. Low-priority
 ideas stay here as the backlog until ben picks them up.
 
+## 2026-11-18 (late night): auto next scene, click-through tutorial, four mockups (ben)
+
+| ben's note | Status |
+| --- | --- |
+| "you shouldn't have to click next scene... you should automatically be moved to the next scene." | **Done.** 4 s after "Cut! That's a print" the next scene loads by itself. The Next scene button stays as a skip. |
+| "the tutorial steps should be click through so you can indicate once you've read them." | **Done** for the one lesson that's only reading (the two shots): it waits for a **Got it** button (pinch it on the strip in the headset, click it on the iPad) instead of a 7 s timer. The other lessons already finish when you do the thing they ask. |
+| Sign "a little TOO high above us", scoot it back and size it down. | **Mocked up, waiting on ben:** on the back wall, 90%, bottom just clear of the grid's front edge. |
+| Hints as arrows showing where to move one light at a time. | **Mocked up, waiting on ben:** yellow arrow on the tip's light, pointing the tip's direction. |
+| A very small YOUR SHOT monitor next to the camera. | **Mocked up, waiting on ben.** |
+| Phone as an easter egg, to scale, on the craft services table, buzzing. | **Mocked up, waiting on ben.** |
+
+Mockup images: project files `meta-vr/playtest-r7/`. Mock code: project files `meta-vr/playtest-r7/mock-r7.patch` (applies on main at f480e5d).
+
 ## 2026-11-18 (late): the studio in front of you, bigger; plain VR (ben, Quest 1)
 
 ben: "the main studio should be right in front of you. and you should be closer, and it should

@@ -50,6 +50,13 @@ const fs = require('fs');
   check(c && c.ring && /TARGET/.test(c.text), `scene 1 rings the two shots: ${c && c.text}`);
   await page.waitForTimeout(800);
   await snap('scene1-shots');
+  // Reading-only: it waits for Got it (ben, 2026-11-18: tutorial steps are click-through).
+  await page.waitForTimeout(8000);
+  c = await coach();
+  check(c && c.skill === 'shots', `the shots lesson waits (no timer): ${c && c.skill}`);
+  check((await api(() => window.lightLab.card())).button === 'Got it', 'it shows a Got it button');
+  const gotIt = await at('card-button');
+  await page.mouse.click(gotIt.x, gotIt.y);
   c = await waitFor('house');
   check(c && c.ring && /HOUSE/.test(c.text), `then rings HOUSE: ${c && c.text}`);
   await snap('scene1-house');

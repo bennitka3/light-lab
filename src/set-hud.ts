@@ -288,7 +288,8 @@ export class EdgeStrip {
 export const PANEL_H = 0.034;
 const SEG_W = 0.07;
 
-export type PanelState = { label: string; on: boolean; dimmer?: number; kelvin?: number };
+/** `cue` softly outlines the dimmer button the tip line is asking for. */
+export type PanelState = { label: string; on: boolean; dimmer?: number; kelvin?: number; cue?: 'dimmer' | 'brighter' };
 export type PanelControl = 'power' | 'dimmer' | 'brighter' | 'warmer' | 'cooler';
 
 /** A light's own controls, floating over it while you point at it. */
@@ -317,7 +318,7 @@ export class LightPanel {
   }
 
   set(s: PanelState): void {
-    const key = `${s.label}|${s.on}|${s.dimmer}|${s.kelvin}`;
+    const key = `${s.label}|${s.on}|${s.dimmer}|${s.kelvin}|${s.cue ?? ''}`;
     if (key === this.key) return;
     this.key = key;
     this.draw(s);
@@ -382,6 +383,14 @@ export class LightPanel {
       ctx.fillStyle = color;
       ctx.font = `bold ${m(0.0105)}px system-ui, sans-serif`;
       ctx.fillText(value, x + (sw - ctx.measureText(value).width) / 2, H / 2);
+      // The tip's ask (brighter or dimmer), outlined softly on its half of the stepper.
+      if (s.cue === down || s.cue === up) {
+        const half = s.cue === down ? x : x + sw / 2;
+        roundRect(ctx, half + m(0.002), m(0.003), sw / 2 - m(0.004), H - m(0.006), m(0.004));
+        ctx.strokeStyle = 'rgba(245,217,10,0.7)';
+        ctx.lineWidth = m(0.0012);
+        ctx.stroke();
+      }
       this.hits.push({ control: down, frame: toFrame(x, sw / 2) });
       this.hits.push({ control: up, frame: toFrame(x + sw / 2, sw / 2) });
       x += sw;
