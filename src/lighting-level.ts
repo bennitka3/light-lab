@@ -171,29 +171,32 @@ const HUD_PHONE_AWAKE_OFFSET = new Vector3(0.26, 0, -0.84);
 const HUD_PHONE_XR_SCALE = 1.6;
 const HUD_PHONE_AWAKE_XR_SCALE = 2.3;
 const HUD_DESKTOP_DISTANCE = 0.6;
-// The Video Village monitor (ben, 2026-11-17 headset playtest: the iPad and phone "following
-// you around" blocked the view, and he ended up watching the iPad instead of the set). In the
-// headset the iPad stands on a C-stand just behind the set, its bottom edge clear of the back
-// wall, so one glance takes in the set and the shots, and nothing hangs in front of your face.
-/** How far behind the set's back wall the monitor stands (meters). */
-const DOCK_BEHIND = 0.07;
-/** How far it sits toward the director's side of the set (meters). */
-const DOCK_TOWARD_DIRECTOR = 0.05;
-/** Its bottom edge clears the top of the set's walls by this much. */
-const DOCK_ABOVE_WALLS = 0.03;
-/** Its play strip is about 70 cm wide; the title page about 75 cm. */
-const DOCK_XR_SCALE = 1.75;
-const DOCK_FULL_XR_SCALE = 1.9;
-const Y_AXIS = new Vector3(0, 1, 0);
-// The Video Village cart beside the set (ben, 2026-11-17): the phone and a handheld iPad lie
-// on it. Tap either to bring it up in front of you like before; tap again (or Put down) to
-// set it back. Squeeze and drag a held one to move it in your view; that spot is remembered.
-/** How far out from the set's side wall the cart stands, toward the director (meters). */
-const CART_OUT = 0.2;
-const CART_TOP = new Vector3(0.3, 0.018, 0.2);
+// Video Village (ben, 2026-11-17 headset playtest: the iPad and phone "following you around"
+// blocked the view; then "I was imagining a fixed VR-world object, not a magically oriented
+// menu item"). In the headset it's a real cart standing on the floor beside the set, on the
+// director's side: a monitor on a short post at the back, the phone and a handheld iPad lying
+// on top. It never moves or turns to follow you, and it stays clear of the set.
+/** Where the cart stands, in the set's own meters (x toward craft services, z toward you). */
+const CART_AT = { x: -0.68, z: 0.1 };
+/** Where you stand at the start, in the set's meters: the cart turns to face it, once. */
+const START_SPOT = { x: 0, z: 0.55 };
+const CART_TOP = new Vector3(0.44, 0.02, 0.28);
+/** The monitor shows the iPad's picture about 52 cm wide, leaning back a little. */
+const DOCK_XR_SCALE = 1.3;
+const DOCK_FULL_XR_SCALE = 1.3;
+const DOCK_TILT_DEG = 8;
+/** How far above the cart top the monitor's bottom edge sits (on its post). */
+const DOCK_POST = 0.22;
 /** The iPad on the cart: about 24 cm wide, like a real one. */
 const CART_IPAD_SCALE = 0.6;
-const HELD_KEY = 'lightLab.heldOffsets';
+/** On start the view turns to face the set, this far round toward the cart (degrees). */
+const FACE_TOWARD_CART_DEG = 12;
+const Y_AXIS = new Vector3(0, 1, 0);
+const X_AXIS = new Vector3(1, 0, 0);
+// Squeeze and drag a held iPad or phone to move it in your view; that spot is remembered.
+const HELD_KEY = 'lightLab.heldOffsets.v2';
+/** Held iPad: low and to the cart's side of your view, so the set stays clear. */
+const HELD_IPAD_OFFSET = new Vector3(-0.3, -0.14, -0.7);
 
 type Pose = { azimuth: number; elevation: number; distance: number };
 type Phase = 'title' | 'playing' | 'won' | 'rolled' | 'credits';
@@ -371,7 +374,7 @@ const ZOOM_KEY = 'lightLab.ipadZoom';
 
 /** Where you last dragged the held iPad and phone to (head space), or the defaults. */
 function loadHeldOffsets(): { ipad: Vector3; phone: Vector3 } {
-  const offsets = { ipad: HUD_IPAD_OFFSET.clone(), phone: HUD_PHONE_AWAKE_OFFSET.clone() };
+  const offsets = { ipad: HELD_IPAD_OFFSET.clone(), phone: HUD_PHONE_AWAKE_OFFSET.clone() };
   try {
     const saved = JSON.parse(localStorage.getItem(HELD_KEY) ?? 'null') as { ipad?: number[]; phone?: number[] } | null;
     if (saved?.ipad?.length === 3) offsets.ipad.fromArray(saved.ipad);
@@ -496,18 +499,15 @@ export class LightingLevelSystem extends createSystem({
   /** The monitor's bottom-center and facing, in world space. */
   private dockBottom = new Vector3();
   private dockQuat = new Quaternion();
-  private dockStand?: Object3D;
-  private dockFacer = new Object3D();
   private cartObject?: Object3D;
   private dockTmp = new Vector3();
   private dockDir = new Vector3();
-  /** Headset: you've picked the handheld iPad up off the cart (the monitor shows a mirror of it). */
+  /** Headset: you've picked the handheld iPad up off the cart (the monitor goes dark meanwhile). */
   private ipadHeld = false;
-  /** The monitor while the iPad is in your hand, and the iPad lying on the cart: copies that share its pictures. */
-  private monitorMirror?: Object3D;
+  /** The iPad lying on the cart: a copy that shares its pictures. */
   private cartIpad?: Object3D;
   private cartIpadEntity?: Entity;
-  /** [original, copy, copy] meshes whose visibility the copies follow (the shots hide on full pages). */
+  /** [original, copy] meshes whose visibility the copy follows (the shots hide on full pages). */
   private mirrorPairs: Object3D[][] = [];
   private cartPhonePos = new Vector3();
   private cartPhoneQuat = new Quaternion();
@@ -3498,18 +3498,17 @@ export class LightingLevelSystem extends createSystem({
     const ipad = this.ipad.object;
     const phone = this.phone.mesh;
     const held = this.ipadHeld;
-    const monitor = held && this.monitorMirror ? this.monitorMirror : ipad;
-    const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE * zoom;
-    monitor.scale.setScalar(scale);
-    monitor.quaternion.copy(this.dockQuat);
-    this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
-    monitor.position.copy(this.dockBottom).add(this.v1);
-    if (this.monitorMirror) this.monitorMirror.visible = held;
-    if (this.cartIpad) this.cartIpad.visible = !held;
-    for (const pair of this.mirrorPairs) {
-      pair[1].visible = pair[0].visible;
-      pair[2].visible = pair[0].visible;
+    if (!held) {
+      // On the monitor: fixed on the cart, its bottom edge on the post. Only one iPad at a
+      // time (ben: "why are there two sets of the iPads"): while you hold it the monitor is dark.
+      const scale = full ? DOCK_FULL_XR_SCALE : DOCK_XR_SCALE;
+      ipad.scale.setScalar(scale);
+      ipad.quaternion.copy(this.dockQuat);
+      this.v1.set(0, (IPAD_HEIGHT * scale) / 2, 0).applyQuaternion(this.dockQuat);
+      ipad.position.copy(this.dockBottom).add(this.v1);
     }
+    if (this.cartIpad) this.cartIpad.visible = !held;
+    for (const pair of this.mirrorPairs) pair[1].visible = pair[0].visible;
     if (held) {
       // In your hand, where you left it last (drag it with the squeeze to move it).
       ipad.scale.setScalar(full ? HUD_IPAD_FULL_XR_SCALE : HUD_IPAD_XR_SCALE * zoom);
@@ -3518,6 +3517,9 @@ export class LightingLevelSystem extends createSystem({
       ipad.position.lerp(this.hudTarget, follow);
       ipad.lookAt(this.headWorld);
     }
+    const onCart = !this.phone.pinned;
+    phone.renderOrder = onCart ? 990 : 1003;
+    (phone.material as MeshBasicMaterial).depthTest = onCart;
     if (this.phone.pinned) {
       // Picked up: in front of you, where you left it last.
       phone.scale.setScalar(HUD_PHONE_AWAKE_XR_SCALE * zoom);
@@ -3527,7 +3529,8 @@ export class LightingLevelSystem extends createSystem({
       phone.position.lerp(this.hudTarget, follow);
       phone.lookAt(this.headWorld);
     } else {
-      // Lying on the cart; a new text lights it up there.
+      // Lying on the cart; a new text lights it up there. It's a thing in the room now, so it
+      // hides behind real things and under the iPad you hold.
       phone.scale.setScalar(1);
       phone.position.lerp(this.cartPhonePos, follow);
       phone.quaternion.slerp(this.cartPhoneQuat, follow);
@@ -3611,47 +3614,53 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /**
-   * Headset start: stands the Video Village monitor up beside the set, toward the director,
-   * and turns the room so you begin facing the set and the monitor (ben, 2026-11-17: "when it
-   * started up, it was behind me"). Runs once per headset session.
+   * Headset start: puts the Video Village cart beside the set (once per session, at a fixed
+   * spot by the set, not by you) and turns your view to face the set, with the cart off to
+   * the side (ben, 2026-11-17: "when it started up, it was behind me").
    */
   private setUpVideoVillage(): void {
     this.dockReady = true;
     const head = this.headWorld;
-    // Which way the set is from your head, flat on the floor.
-    const toSet = this.stage.getWorldPosition(this.dockTmp).sub(head).setY(0);
+    this.buildCart();
+    const cart = this.cartObject!;
+    const stageAt = this.stage.getWorldPosition(this.dockTmp);
+    cart.visible = true;
+    cart.position.set(stageAt.x + CART_AT.x, stageAt.y, stageAt.z + CART_AT.z);
+    cart.rotation.set(0, Math.atan2(START_SPOT.x - CART_AT.x, START_SPOT.z - CART_AT.z), 0);
+    cart.updateMatrixWorld(true);
+    // The monitor's spot (bottom-center of its screen), the phone's and the handheld iPad's.
+    cart.getObjectByName('spot-monitor')!.getWorldPosition(this.dockBottom);
+    cart.getObjectByName('spot-monitor')!.getWorldQuaternion(this.dockQuat);
+    cart.getObjectByName('spot-phone')!.getWorldPosition(this.cartPhonePos);
+    cart.getObjectByName('spot-phone')!.getWorldQuaternion(this.cartPhoneQuat);
+    const ipadSpot = cart.getObjectByName('spot-ipad')!;
+    ipadSpot.getWorldPosition(this.cartIpadPos);
+    ipadSpot.getWorldQuaternion(this.cartIpadQuat);
+    if (this.cartIpad) {
+      this.cartIpad.position.copy(this.cartIpadPos);
+      this.cartIpad.quaternion.copy(this.cartIpadQuat);
+      this.cartIpad.scale.setScalar(CART_IPAD_SCALE);
+      this.cartIpad.visible = true;
+    }
+    // Turn your view about your head (the room's origin turns, the set stays put) so you face
+    // the set, a little round toward the cart so both are in view.
+    const toSet = this.dockDir.copy(stageAt).sub(head).setY(0);
     if (toSet.lengthSq() < 1e-6) toSet.set(0, 0, -1);
-    toSet.normalize();
-    // Behind the set's back wall (as seen from you), nudged toward the director's side (-x).
-    this.stage.getWorldPosition(this.dockBottom);
-    const bottomY = this.dockBottom.y + STAGE_HEIGHT + DOCK_ABOVE_WALLS;
-    this.dockBottom.addScaledVector(toSet, STAGE_DEPTH / 2 + DOCK_BEHIND);
-    this.dockBottom.x -= DOCK_TOWARD_DIRECTOR;
-    this.dockBottom.y = bottomY;
-    // Face your head, tipped back a little toward your eyes.
-    const facer = this.dockFacer;
-    facer.position.set(this.dockBottom.x, bottomY + 0.17, this.dockBottom.z);
-    facer.lookAt(head);
-    this.dockQuat.copy(facer.quaternion);
-    this.buildDockStand();
-    this.placeDockStand();
-    this.setUpCart(toSet);
-    // Turn your view about your head (the room's origin turns, the set stays put) so you
-    // face the set, with the monitor just above it.
+    toSet.normalize().applyAxisAngle(Y_AXIS, MathUtils.degToRad(FACE_TOWARD_CART_DEG));
+    const faceYaw = Math.atan2(-toSet.x, -toSet.z);
     this.world.camera.getWorldDirection(this.dockDir);
-    const headYaw = Math.atan2(-this.dockDir.x, -this.dockDir.z);
-    let turn = Math.atan2(-toSet.x, -toSet.z) - headYaw;
+    let turn = faceYaw - Math.atan2(-this.dockDir.x, -this.dockDir.z);
     turn = Math.atan2(Math.sin(turn), Math.cos(turn));
     const player = this.world.player;
     player.position.sub(head).applyAxisAngle(Y_AXIS, turn).add(head);
     player.rotation.y += turn;
     player.updateMatrixWorld(true);
     devLog(
-      `video village: monitor at ${this.dockBottom.x.toFixed(2)},${this.dockBottom.y.toFixed(2)},${this.dockBottom.z.toFixed(2)}, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
+      `video village: cart at ${cart.position.x.toFixed(2)},${cart.position.z.toFixed(2)}, monitor bottom at ${this.dockBottom.y.toFixed(2)}, cart iPad at ${this.cartIpadPos.x.toFixed(2)},${this.cartIpadPos.y.toFixed(2)},${this.cartIpadPos.z.toFixed(2)}, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
     );
   }
 
-  /** Leaving or entering the headset: the room goes back to how it was, and the monitor is set up again next time. */
+  /** Leaving or entering the headset: the room goes back to how it was, and the cart is set up again next time. */
   private resetVideoVillage(): void {
     this.dockReady = false;
     this.immersiveFrames = 0;
@@ -3661,10 +3670,12 @@ export class LightingLevelSystem extends createSystem({
       player.position.set(0, 0, 0);
       player.rotation.set(0, 0, 0);
     }
-    if (this.dockStand) this.dockStand.visible = false;
     if (this.cartObject) this.cartObject.visible = false;
     if (this.cartIpad) this.cartIpad.visible = false;
-    if (this.monitorMirror) this.monitorMirror.visible = false;
+    if (this.phone) {
+      this.phone.mesh.renderOrder = 1003;
+      (this.phone.mesh.material as MeshBasicMaterial).depthTest = false;
+    }
     this.holdIpad(false);
     this.hudDrag = null;
     for (const hand of ['left', 'right'] as const) {
@@ -3676,129 +3687,79 @@ export class LightingLevelSystem extends createSystem({
   }
 
   /**
-   * The Video Village cart, beside the set on the director's side: the phone lies on it, and
-   * the handheld iPad leans on a little easel. Both face you.
+   * Builds the Video Village cart once: a dark cart on four legs, a monitor (a dark body on a
+   * short post) at the back, and spots for the phone and the handheld iPad on top. Its own
+   * +z faces where you start.
    */
-  private setUpCart(toSet: Vector3): void {
-    const head = this.headWorld;
-    const side = new Vector3().copy(toSet).applyAxisAngle(Y_AXIS, Math.PI / 2);
-    const center = this.stage.getWorldPosition(new Vector3());
-    const topY = center.y - 0.004;
-    center.addScaledVector(side, STAGE_WIDTH / 2 + CART_OUT).addScaledVector(toSet, -0.04);
-    const facer = this.dockFacer;
-    if (!this.cartObject) {
-      const cart = new Group();
-      cart.name = 'video-village-cart';
-      const top = new Mesh(new BoxGeometry(CART_TOP.x, CART_TOP.y, CART_TOP.z), new MeshStandardMaterial({ color: '#2b2c30', roughness: 0.7 }));
-      top.name = 'cart-top';
-      cart.add(top);
-      const legMaterial = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
-      for (let i = 0; i < 4; i++) {
-        const leg = new Mesh(new CylinderGeometry(0.008, 0.008, 1, 8), legMaterial);
-        leg.name = 'cart-leg';
-        leg.position.set((i % 2 ? 1 : -1) * (CART_TOP.x / 2 - 0.02), 0, (i < 2 ? 1 : -1) * (CART_TOP.z / 2 - 0.02));
-        cart.add(leg);
-      }
-      this.cartObject = cart;
-      this.world.createTransformEntity(cart);
-      // The iPad on the cart and the monitor's mirror: copies of the iPad that share its pictures.
-      const visuals = this.ipad.object.children.filter((c) => c.name !== 'ipad-hit' && !c.name.startsWith('coach'));
-      const cartIpad = new Group();
-      cartIpad.name = 'cart-ipad';
-      const mirror = new Group();
-      mirror.name = 'monitor-mirror';
-      for (const visual of visuals) {
-        const a = visual.clone(false);
-        const b = visual.clone(false);
-        // The cart's copy sits among real things, so it hides behind them (the iPad itself draws on top).
-        if (a instanceof Mesh && a.material instanceof MeshBasicMaterial) {
-          a.material = a.material.clone();
-          a.material.depthTest = true;
-        }
-        cartIpad.add(a);
-        mirror.add(b);
-        this.mirrorPairs.push([visual, a, b]);
-      }
-      this.cartIpad = cartIpad;
-      this.monitorMirror = mirror;
-      mirror.visible = false;
-      this.world.scene.add(mirror);
-      this.cartIpadEntity = this.world.createTransformEntity(cartIpad);
-      this.cartIpadEntity.addComponent(RayInteractable);
-      (cartIpad as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
-      (cartIpad as unknown as { addEventListener: (type: string, fn: () => void) => void }).addEventListener('pointerdown', () => {
-        if (this.immersive) this.holdIpad(true);
-      });
-    }
-    const cart = this.cartObject;
-    cart.visible = true;
-    cart.position.set(center.x, topY - CART_TOP.y / 2, center.z);
-    cart.rotation.set(0, Math.atan2(-toSet.x, -toSet.z), 0);
-    for (const leg of cart.children) {
-      if (leg.name !== 'cart-leg') continue;
-      const h = topY - CART_TOP.y;
-      leg.scale.y = h;
-      leg.position.y = -CART_TOP.y / 2 - h / 2;
-    }
-    // The phone lies near your end of the cart, propped toward you.
-    this.cartPhonePos.copy(center).addScaledVector(toSet, -0.05).addScaledVector(side, 0.07);
-    this.cartPhonePos.y = topY + 0.03;
-    facer.position.copy(this.cartPhonePos);
-    facer.lookAt(head);
-    this.cartPhoneQuat.copy(facer.quaternion);
-    // The iPad leans on its easel at the back of the cart.
-    const ipad = this.cartIpad!;
-    ipad.scale.setScalar(CART_IPAD_SCALE);
-    this.cartIpadPos.copy(center).addScaledVector(toSet, 0.04).addScaledVector(side, -0.04);
-    this.cartIpadPos.y = topY + (IPAD_HEIGHT * CART_IPAD_SCALE) / 2 - 0.004;
-    facer.position.copy(this.cartIpadPos);
-    facer.lookAt(head);
-    this.cartIpadQuat.copy(facer.quaternion);
-    ipad.position.copy(this.cartIpadPos);
-    ipad.quaternion.copy(this.cartIpadQuat);
-  }
-
-  /** A C-stand for the monitor: three legs on the floor, a pole up to the monitor's bottom edge. */
-  private buildDockStand(): void {
-    if (this.dockStand) return;
-    const stand = new Group();
-    stand.name = 'video-village-stand';
+  private buildCart(): void {
+    if (this.cartObject) return;
+    const cart = new Group();
+    cart.name = 'video-village-cart';
+    const dark = new MeshStandardMaterial({ color: '#2b2c30', roughness: 0.7 });
     const metal = new MeshStandardMaterial({ color: '#3a3b40', metalness: 0.6, roughness: 0.45 });
-    const pole = new Mesh(new CylinderGeometry(0.011, 0.011, 1, 12), metal);
-    pole.name = 'video-village-pole';
-    stand.add(pole);
-    for (let i = 0; i < 3; i++) {
-      const leg = new Mesh(new CylinderGeometry(0.007, 0.007, 0.36, 8), metal);
-      const a = (i / 3) * Math.PI * 2 + 0.5;
-      leg.position.set(Math.sin(a) * 0.14, 0.09, Math.cos(a) * 0.14);
-      leg.rotation.set(Math.cos(a) * 1.05, 0, -Math.sin(a) * 1.05);
-      stand.add(leg);
+    const topY = -0.004;
+    const top = new Mesh(new BoxGeometry(CART_TOP.x, CART_TOP.y, CART_TOP.z), dark);
+    top.position.y = topY - CART_TOP.y / 2;
+    cart.add(top);
+    // Legs down to the real floor (the set sits at table height).
+    const legH = this.stage.getWorldPosition(this.dockTmp).y + topY - CART_TOP.y;
+    for (let i = 0; i < 4; i++) {
+      const leg = new Mesh(new CylinderGeometry(0.009, 0.009, legH, 8), metal);
+      leg.position.set((i % 2 ? 1 : -1) * (CART_TOP.x / 2 - 0.025), topY - CART_TOP.y - legH / 2, (i < 2 ? 1 : -1) * (CART_TOP.z / 2 - 0.025));
+      cart.add(leg);
     }
-    // A bracket across the back of the monitor's bottom edge.
-    const bracket = new Mesh(new BoxGeometry(0.3, 0.03, 0.02), metal);
-    bracket.name = 'video-village-bracket';
-    stand.add(bracket);
-    this.dockStand = stand;
-    this.world.createTransformEntity(stand);
-  }
-
-  private placeDockStand(): void {
-    const stand = this.dockStand;
-    if (!stand) return;
-    stand.visible = true;
-    // Just behind the screen.
-    this.v1.set(0, 0, -0.025).applyQuaternion(this.dockQuat);
-    stand.position.set(this.dockBottom.x + this.v1.x, 0, this.dockBottom.z + this.v1.z);
-    this.dockDir.set(0, 0, 1).applyQuaternion(this.dockQuat);
-    stand.rotation.set(0, Math.atan2(this.dockDir.x, this.dockDir.z), 0);
-    const pole = stand.getObjectByName('video-village-pole');
-    const h = this.dockBottom.y + 0.02;
-    if (pole) {
-      pole.scale.y = h;
-      pole.position.y = h / 2;
+    // The monitor: a post at the back of the cart, a dark body behind the picture.
+    const backZ = -CART_TOP.z / 2 + 0.05;
+    const post = new Mesh(new CylinderGeometry(0.012, 0.012, DOCK_POST, 10), metal);
+    post.position.set(0, topY + DOCK_POST / 2, backZ - 0.02);
+    cart.add(post);
+    const spotMonitor = new Object3D();
+    spotMonitor.name = 'spot-monitor';
+    spotMonitor.position.set(0, topY + DOCK_POST, backZ);
+    spotMonitor.rotation.x = -MathUtils.degToRad(DOCK_TILT_DEG);
+    cart.add(spotMonitor);
+    const bodyW = IPAD_WIDTH * DOCK_XR_SCALE + 0.02;
+    const bodyH = IPAD_HEIGHT * DOCK_XR_SCALE + 0.02;
+    const body = new Mesh(new BoxGeometry(bodyW, bodyH, 0.025), new MeshStandardMaterial({ color: '#141416', roughness: 0.5 }));
+    body.position.set(0, bodyH / 2 - 0.01, -0.016);
+    spotMonitor.add(body);
+    // The phone lies near your end, on the craft-services side, tipped toward you.
+    const spotPhone = new Object3D();
+    spotPhone.name = 'spot-phone';
+    spotPhone.position.set(0.12, topY + 0.03, 0.06);
+    spotPhone.quaternion.setFromAxisAngle(X_AXIS, -MathUtils.degToRad(62));
+    cart.add(spotPhone);
+    // The handheld iPad leans back on the director's side.
+    const spotIpad = new Object3D();
+    spotIpad.name = 'spot-ipad';
+    const lean = MathUtils.degToRad(50);
+    const h = (IPAD_HEIGHT * CART_IPAD_SCALE) / 2;
+    spotIpad.position.set(-0.12, topY + h * Math.cos(lean) - 0.004, 0.08 - h * Math.sin(lean));
+    spotIpad.quaternion.setFromAxisAngle(X_AXIS, -lean);
+    cart.add(spotIpad);
+    this.cartObject = cart;
+    this.world.createTransformEntity(cart);
+    // The iPad on the cart: a copy of the iPad that shares its pictures; tap it to pick it up.
+    const visuals = this.ipad.object.children.filter((c) => c.name !== 'ipad-hit' && !c.name.startsWith('coach'));
+    const cartIpad = new Group();
+    cartIpad.name = 'cart-ipad';
+    for (const visual of visuals) {
+      const copy = visual.clone(false);
+      // It sits among real things, so it hides behind them (the iPad itself draws on top).
+      if (copy instanceof Mesh && copy.material instanceof MeshBasicMaterial) {
+        copy.material = copy.material.clone();
+        copy.material.depthTest = true;
+      }
+      cartIpad.add(copy);
+      this.mirrorPairs.push([visual, copy]);
     }
-    const bracket = stand.getObjectByName('video-village-bracket');
-    if (bracket) bracket.position.y = this.dockBottom.y + 0.01;
+    this.cartIpad = cartIpad;
+    this.cartIpadEntity = this.world.createTransformEntity(cartIpad);
+    this.cartIpadEntity.addComponent(RayInteractable);
+    (cartIpad as unknown as { pointerEventsOrder: number }).pointerEventsOrder = 10;
+    (cartIpad as unknown as { addEventListener: (type: string, fn: () => void) => void }).addEventListener('pointerdown', () => {
+      if (this.immersive) this.holdIpad(true);
+    });
   }
 
   /**
