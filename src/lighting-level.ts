@@ -370,8 +370,9 @@ function itemName(item: KitItem): string {
 const ZOOM_KEY = 'lightLab.ipadZoom';
 /** How long the ring stays round a light the tip names for the first time, unless you point at it first (seconds). */
 const HINT_RING_SECONDS = 12;
-/** Headset: the set's floor sits about this far under your eyes at the start. */
-const SET_BELOW_EYES = 0.45;
+/** Headset: how much bigger the set looks (you're scaled down), and where your eyes start, in set meters. */
+const SET_ZOOM = 1.6;
+const VIEW_AT = new Vector3(0, 0.25, 0.46);
 // Headset brightness (ben, 2026-11-18: "everything is just darker in VR"): an exposure for the
 // view of the set, set with - and + under the title page and saved on this headset.
 const BRIGHT_KEY = 'lightLab.vrBrightness';
@@ -522,6 +523,7 @@ export class LightingLevelSystem extends createSystem({
   private dockTmp = new Vector3();
   private dockDir = new Vector3();
   private dockQuatTmp = new Quaternion();
+  private v3d = new Vector3();
   /** A hand's ray is on the light panel (it stays up while you use it). */
   private panelHot = false;
   /** The light the dimmer tip is about (it stays there until that light is right). */
@@ -539,7 +541,6 @@ export class LightingLevelSystem extends createSystem({
   private hintName = '';
   /** Headset brightness (exposure), saved on this headset; the set is raised toward eye level too. */
   private vrBrightness = loadBrightness();
-  private raisedBy = 0;
   private toneMappingHome?: ToneMapping;
   private exposureHome = 1;
   /** Where the strip sits on the sign (the sign's own meters). */
@@ -704,7 +705,7 @@ export class LightingLevelSystem extends createSystem({
         xr.isSessionSupported('immersive-vr').catch(() => false),
       ]).then(([ar, vr]) => {
         this.canEnterXR = ar || vr;
-        this.xrModes = [...(ar ? [SessionMode.ImmersiveAR] : []), ...(vr ? [SessionMode.ImmersiveVR] : [])];
+        this.xrModes = [...(vr ? [SessionMode.ImmersiveVR] : []), ...(ar ? [SessionMode.ImmersiveAR] : [])];
         if (this.ready && this.phase === 'title') this.showTitleCard();
         if (this.ready) this.ipad.setVrButton(this.canEnterXR && !this.immersive);
       });
@@ -3745,7 +3746,8 @@ export class LightingLevelSystem extends createSystem({
     (phone.material as MeshBasicMaterial).depthTest = onSet;
     if (this.phone.pinned) {
       // Picked up: in front of you, where you left it last.
-      phone.scale.setScalar(HUD_PHONE_AWAKE_XR_SCALE * zoom);
+      // You're scaled down on set, so it's scaled with you to look the same size in your hand.
+      phone.scale.setScalar((HUD_PHONE_AWAKE_XR_SCALE * zoom) / SET_ZOOM);
       this.hudTarget.copy(this.heldOffsets.phone);
       this.hudTarget.y += bounce;
       camera.localToWorld(this.hudTarget);
@@ -3886,18 +3888,15 @@ export class LightingLevelSystem extends createSystem({
    */
   private setUpOnSet(): void {
     this.dockReady = true;
-    const head = this.headWorld;
     this.buildSetHud();
     const stage = this.stage;
-    // Raise the set toward eye level (ben, 2026-11-18: "it should be a little bit higher... not
-    // below you, because then you feel like you're having to hunch your neck"): its floor about
-    // half a meter under your eyes, never lower than it stands.
-    stage.updateMatrixWorld(true);
-    const floorY = stage.getWorldPosition(this.dockTmp).y;
-    this.raiseSet(Math.max(0, head.y - SET_BELOW_EYES - floorY));
     this.applyBrightness(true);
+    // A dark studio around you in plain VR (no passthrough); the real room shows through in AR.
+    const session = this.world.renderer.xr.getSession();
+    if (session && session.environmentBlendMode === 'opaque') this.world.scene.background = this.backdrop;
     stage.updateMatrixWorld(true);
-    const local = stage.worldToLocal(this.dockTmp.copy(head));
+    this.placeViewer();
+    const local = this.dockTmp.copy(VIEW_AT);
     // The sign: centered over the front of the stage, its bottom just above your sightline to
     // the back of the set floor, so it never hides the set (and above the lighting grid).
     const sign = this.sign!;
@@ -3947,44 +3946,37 @@ export class LightingLevelSystem extends createSystem({
     this.v1.set(PHONE_SPOT.x, PHONE_SPOT.y + ((PHONE_HEIGHT * PHONE_SPOT_SCALE) / 2) * Math.cos(lean), PHONE_SPOT.z);
     stage.localToWorld(this.phoneSpotPos.copy(this.v1));
     stage.getWorldQuaternion(this.phoneSpotQuat).multiply(this.dockQuatTmp.setFromAxisAngle(X_AXIS, -lean));
-    // Turn your view about your head (the room's origin turns, the set stays put) to face the set.
-    const stageAt = stage.getWorldPosition(this.dockTmp);
-    const toSet = this.dockDir.copy(stageAt).sub(head).setY(0);
-    if (toSet.lengthSq() < 1e-6) toSet.set(0, 0, -1);
-    toSet.normalize();
-    const faceYaw = Math.atan2(-toSet.x, -toSet.z);
-    this.world.camera.getWorldDirection(this.dockDir);
-    let turn = faceYaw - Math.atan2(-this.dockDir.x, -this.dockDir.z);
-    turn = Math.atan2(Math.sin(turn), Math.cos(turn));
-    const player = this.world.player;
-    player.position.sub(head).applyAxisAngle(Y_AXIS, turn).add(head);
-    player.rotation.y += turn;
-    player.updateMatrixWorld(true);
     devLog(
-      `on set: sign bottom ${(bottom + stage.position.y).toFixed(2)} m up (sightline ${(sightY + stage.position.y).toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°, view turned ${MathUtils.radToDeg(turn).toFixed(0)}°`,
+      `on set: sign bottom ${bottom.toFixed(2)} m over the set floor (sightline ${sightY.toFixed(2)}), tipped ${MathUtils.radToDeg(pitch).toFixed(0)}°`,
     );
   }
 
-  /** Moves the set (and the things kept in room space that belong to it) up by dy meters. */
-  private raiseSet(dy: number): void {
-    if (Math.abs(dy) < 1e-4) return;
-    this.stage.position.y += dy;
-    this.stage.updateMatrixWorld(true);
-    // The house light's aim and the switches' hit boxes live in room space.
-    for (const light of this.houseLights) {
-      light.position.y += dy;
-      if (light instanceof DirectionalLight) light.target.position.y += dy;
-    }
-    for (const sw of this.switches) {
-      let underStage = false;
-      sw.hit.traverseAncestors((a) => {
-        if (a === this.stage) underStage = true;
-      });
-      if (!underStage) sw.hit.position.y += dy;
-    }
-    this.raisedBy += dy;
-    this.retakeTarget = true;
-    devLog(`set raised ${dy.toFixed(2)} m`);
+  /**
+   * Puts you right in front of the set's open front, eyes a little above its floor, facing it,
+   * and makes the set look SET_ZOOM times bigger by scaling you down (ben, 2026-11-18: "the main
+   * studio should be right in front of you. and you should be closer, and it should feel bigger").
+   * Scaling you, not the set, keeps the lights' falloff and shadows exactly as scored.
+   */
+  private placeViewer(): void {
+    const player = this.world.player;
+    const camera = this.world.camera;
+    const stage = this.stage;
+    // Face the set: the stage's own -z, whatever way your head happens to point in the room.
+    this.dockDir.set(0, 0, -1).applyQuaternion(stage.getWorldQuaternion(this.dockQuatTmp));
+    const faceYaw = Math.atan2(-this.dockDir.x, -this.dockDir.z);
+    this.dockDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const headYaw = Math.atan2(-this.dockDir.x, -this.dockDir.z);
+    player.rotation.set(0, faceYaw - headYaw, 0);
+    player.scale.setScalar(1 / SET_ZOOM);
+    // Then slide the room so your eyes land on the spot.
+    stage.localToWorld(this.v1.copy(VIEW_AT));
+    this.v2.copy(camera.position).multiplyScalar(1 / SET_ZOOM).applyAxisAngle(Y_AXIS, player.rotation.y);
+    player.position.copy(this.v1).sub(this.v2);
+    player.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    camera.getWorldPosition(this.headWorld);
+    const at = stage.worldToLocal(this.v3d.copy(this.headWorld));
+    devLog(`viewer at ${at.x.toFixed(2)},${at.y.toFixed(2)},${at.z.toFixed(2)} in set meters (camera local y ${camera.position.y.toFixed(2)})`);
   }
 
   /** Headset brightness: an exposure on the view of the room and set (the shots on the sign stay as they are). */
@@ -4013,8 +4005,6 @@ export class LightingLevelSystem extends createSystem({
 
   /** Leaving or entering the headset: the set goes back to how it was, and is dressed again next time. */
   private resetOnSet(): void {
-    if (this.raisedBy !== 0) this.raiseSet(-this.raisedBy);
-    this.raisedBy = 0;
     this.applyBrightness(false);
     this.dockReady = false;
     this.immersiveFrames = 0;
@@ -4023,6 +4013,7 @@ export class LightingLevelSystem extends createSystem({
     if (player) {
       player.position.set(0, 0, 0);
       player.rotation.set(0, 0, 0);
+      player.scale.setScalar(1);
     }
     if (this.sign) this.sign.group.visible = false;
     this.stage?.getObjectByName('shot-sign-posts')?.removeFromParent();
